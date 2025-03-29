@@ -5,7 +5,7 @@ from typing import List, Dict
 import numpy as np
 import zmq
 import json
-from tracking.lib.abstract_trackers import AbstractConstructionTracker, AbstractMetricTracker, AbstractQueryTracker
+from .abstract_trackers import AbstractConstructionTracker, AbstractMetricTracker, AbstractQueryTracker
 import threading
 
 import matplotlib.pyplot as plt

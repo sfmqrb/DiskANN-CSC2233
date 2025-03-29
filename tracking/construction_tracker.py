@@ -7,14 +7,14 @@ from matplotlib.axes import Axes
 import seaborn as sns
 
 
-from tracking.lib.abstract_trackers import AbstractConstructionTracker
-from tracking.lib.basic_metric_types import FrequencyTracker, ChangeOverTimeTracker
-from tracking.lib.tracker import ConstructionTrackingRunner
+from lib.abstract_trackers import AbstractConstructionTracker
+from lib.basic_metric_types import FrequencyTracker, ChangeOverTimeTracker
+from lib.tracker import ConstructionTrackingRunner
 import subprocess
 import time
 import os
 
-from tracking.lib.util import download_sift, create_build
+from lib.util import download_sift, create_build
 
 class AddEdgeCountTracker(FrequencyTracker, AbstractConstructionTracker):
     def __init__(self):

@@ -44,6 +44,11 @@ else()
         target_link_libraries(${PROJECT_NAME} PRIVATE ${ZeroMQ_LIBRARY})
         target_link_libraries(${PROJECT_NAME}_s PRIVATE ${ZeroMQ_LIBRARY})
     endif()
+
+    if(ISOLATE_ALPHA)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE ISOLATE_ALPHA)
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE ISOLATE_ALPHA)
+    endif()
 endif()
 
 if (NOT MSVC)

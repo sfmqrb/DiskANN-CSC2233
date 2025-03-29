@@ -1,5 +1,5 @@
 import os
-from tracking.lib.util import create_build, download_sift, run_and_parse_output
+from lib.util import create_build, download_sift, run_and_parse_output
 
 import subprocess
 

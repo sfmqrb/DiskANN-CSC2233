@@ -31,10 +31,15 @@ set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake;${CMAKE_MODULE_PATH}")
 
 option(TRACKING_ENABLED "Enable the socket-based tracking instrumentation" OFF)
 
+option(ISOLATE_ALPHA "Enable ISOLATE_ALPHA flag, controls how alpha in robust prune is applied" OFF)
+
 if(TRACKING_ENABLED)
     add_definitions(-DDISKANN_TRACKING_ENABLED)
 endif()
 
+if(ISOLATE_ALPHA)
+    message("Building for ISOLATE_ALPHA.")
+endif()
 
 # Install nuget packages for dependencies.
 if (MSVC)

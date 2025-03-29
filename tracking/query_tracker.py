@@ -1,10 +1,10 @@
-from tracking.lib.abstract_trackers import AbstractQueryTracker
-from tracking.lib.basic_metric_types import FrequencyTracker, ChangeOverTimeTracker
-from tracking.lib.tracker import QueryTrackerRunner
+from lib.abstract_trackers import AbstractQueryTracker
+from lib.basic_metric_types import FrequencyTracker, ChangeOverTimeTracker
+from lib.tracker import QueryTrackerRunner
 import subprocess
 import os
 
-from tracking.lib.util import download_sift, create_build
+from lib.util import download_sift, create_build
 
 class NodeVisitedDistribution(FrequencyTracker, AbstractQueryTracker):
     def __init__(self):

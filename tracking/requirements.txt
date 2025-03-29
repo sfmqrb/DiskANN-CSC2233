@@ -1,6 +1,6 @@
 matplotlib
-tarfile
-re
+#tarfile
+#re
 zmq
 seaborn
 pandas

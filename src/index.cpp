@@ -1080,8 +1080,19 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
+#ifdef ISOLATE_ALPHA
+    // ISOLATE_ALPHA flag changes the behaviour of robust prune to better align with the paper's description.
+    // Changes the following:
+    // - Directly apply the user defined alpha.
+    // - Fixed two sweep over the pool (though the paper uses one sweep).
+    constexpr int max_sweep = 2;
+    int count = 0;
+    float cur_alpha = alpha;
+    while (count < max_sweep && result.size() < degree)
+#else
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree)
+#endif
     {
         // used for MIPS, where we store a value of eps in cur_alpha to
         // denote pruned out entries which we can skip in later rounds.
@@ -1151,7 +1162,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 }
             }
         }
+#ifdef ISOLATE_ALPHA
+        ++count;
+#else
         cur_alpha *= 1.2f;
+#endif
     }
 }
 
