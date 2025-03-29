@@ -13,9 +13,11 @@ def download_sift(base_dir, apps_dir):
 
     sift_learn_fvecs = os.path.join(extracted_folder, "sift_learn.fvecs")
     sift_query_fvecs = os.path.join(extracted_folder, "sift_query.fvecs")
+    sift_base_fvecs = os.path.join(extracted_folder, "sift_base.fvecs")
 
     sift_learn_fbin = os.path.join(extracted_folder, "sift_learn.fbin")
     sift_query_fbin = os.path.join(extracted_folder, "sift_query.fbin")
+    sift_base_fbin = os.path.join(extracted_folder, "sift_base.fbin")
 
     util_dir = os.path.join(apps_dir, 'utils')
 
@@ -52,6 +54,12 @@ def download_sift(base_dir, apps_dir):
         print("Converting sift_query.fvecs to sift_query.fbin...")
         subprocess.run([os.path.join(util_dir, "fvecs_to_bin"), "float", sift_query_fvecs, sift_query_fbin], check=True)
         print("Conversion complete!")
+
+    if os.path.exists(sift_base_fvecs) and not os.path.exists(sift_base_fbin):
+        print("Converting sift_query.fvecs to sift_query.fbin...")
+        subprocess.run([os.path.join(util_dir, "fvecs_to_bin"), "float", sift_base_fvecs, sift_base_fbin], check=True)
+        print("Conversion complete!")
+
 
     print("SIFT dataset is ready.")
 
