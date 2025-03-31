@@ -2,11 +2,46 @@ import os
 import subprocess 
 from pathlib import Path
 import matplotlib.pyplot as plt
+import struct
+import sys
 
 import re
 import urllib.request
 import tarfile
 
+def extract_fvecs_subset(input_file, output_file, num_vectors):
+    """
+    Extract the first num_vectors vectors from an .fvecs file and write them to output_file.
+    The .fvecs format stores each vector as:
+      [4 bytes: dimension (int32, little-endian)] 
+      followed by [dimension * 4 bytes: float32 values]
+    """
+    count = 0
+    with open(input_file, 'rb') as fin, open(output_file, 'wb') as fout:
+        while count < num_vectors:
+            # Read the dimension (4 bytes)
+            header = fin.read(4)
+            if not header:
+                break  # Reached end of file
+            # Unpack the integer (assumed little-endian)
+            (dim,) = struct.unpack('i', header)
+            # Write the header to the output file
+            fout.write(header)
+            # Read the vector (dim floats, each 4 bytes)
+            vector_data = fin.read(dim * 4)
+            if len(vector_data) < dim * 4:
+                break  # Incomplete vector encountered; stop processing
+            fout.write(vector_data)
+            count += 1
+    print(f"Extracted {count} vectors to {output_file}")
+
+def extract(base_dir: str, new_vecs: list):
+    extracted_folder = os.path.join(base_dir, "sift")
+
+    for vec in new_vecs:
+        sift_base_fvecs = os.path.join(extracted_folder, "sift_base.fvecs")
+        sift_new_fvecs = os.path.join(extracted_folder, f"sift_{vec}.fvecs")
+        extract_fvecs_subset(sift_base_fvecs, sift_new_fvecs, vec)
 def download_sift(base_dir, apps_dir):
     tar_file_path = os.path.join(base_dir, "sift.tar.gz")
     extracted_folder = os.path.join(base_dir, "sift")
@@ -14,10 +49,16 @@ def download_sift(base_dir, apps_dir):
     sift_learn_fvecs = os.path.join(extracted_folder, "sift_learn.fvecs")
     sift_query_fvecs = os.path.join(extracted_folder, "sift_query.fvecs")
     sift_base_fvecs = os.path.join(extracted_folder, "sift_base.fvecs")
+    sift_30000_fvecs = os.path.join(extracted_folder, "sift_30000.fvecs")
+    sift_300000_fvecs = os.path.join(extracted_folder, "sift_300000.fvecs")
+
+    # Create middle sized fvecs
 
     sift_learn_fbin = os.path.join(extracted_folder, "sift_learn.fbin")
     sift_query_fbin = os.path.join(extracted_folder, "sift_query.fbin")
     sift_base_fbin = os.path.join(extracted_folder, "sift_base.fbin")
+    sift_30000_fbin = os.path.join(extracted_folder, "sift_30000.fbin")
+    sift_300000_fbin = os.path.join(extracted_folder, "sift_300000.fbin")
 
     util_dir = os.path.join(apps_dir, 'utils')
 
@@ -40,31 +81,29 @@ def download_sift(base_dir, apps_dir):
         with tarfile.open(tar_file_path, "r:gz") as tar:
             tar.extractall(base_dir)
         print("Extraction complete!")
-
     else:
         print("Dataset already exists. Skipping download and extraction.")
 
-    # Convert .fvecs to .fbin if necessary
-    if os.path.exists(sift_learn_fvecs) and not os.path.exists(sift_learn_fbin):
-        print("Converting sift_learn.fvecs to sift_learn.fbin...")
-        subprocess.run([os.path.join(util_dir, "fvecs_to_bin"), "float", sift_learn_fvecs, sift_learn_fbin], check=True)
-        print("Conversion complete!")
+    extract(base_dir, [30000, 300000])
+    # Convert .fvecs to .fbin if necessary using a for loop.
+    # Note: The tuple format is (source_file, target_file, file_label)
+    conversions = [
+        (sift_learn_fvecs, sift_learn_fbin, "sift_learn"),
+        (sift_query_fvecs, sift_query_fbin, "sift_query"),
+        (sift_base_fvecs, sift_base_fbin, "sift_base"),
+        (sift_30000_fvecs, sift_30000_fbin, "sift_30000"),
+        (sift_300000_fvecs, sift_300000_fbin, "sift_300000")
+    ]
 
-    if os.path.exists(sift_query_fvecs) and not os.path.exists(sift_query_fbin):
-        print("Converting sift_query.fvecs to sift_query.fbin...")
-        subprocess.run([os.path.join(util_dir, "fvecs_to_bin"), "float", sift_query_fvecs, sift_query_fbin], check=True)
-        print("Conversion complete!")
-
-    if os.path.exists(sift_base_fvecs) and not os.path.exists(sift_base_fbin):
-        print("Converting sift_query.fvecs to sift_query.fbin...")
-        subprocess.run([os.path.join(util_dir, "fvecs_to_bin"), "float", sift_base_fvecs, sift_base_fbin], check=True)
-        print("Conversion complete!")
-
+    for src, dst, label in conversions:
+        if os.path.exists(src) and not os.path.exists(dst):
+            print(f"Converting {label}.fvecs to {label}.fbin...")
+            subprocess.run([os.path.join(util_dir, "fvecs_to_bin"), "float", src, dst], check=True)
+            print("Conversion complete!")
 
     print("SIFT dataset is ready.")
 
-
-def create_build(project_root, build_subdir="script_output", type="Release", tracking=True, **kwargs):
+def create_build(project_root, build_subdir="script_output", type="Release", tracking=True):
     # Define the build directory (inside `build/`)
     build_dir = os.path.join(project_root, "build", build_subdir)
 
@@ -78,7 +117,6 @@ def create_build(project_root, build_subdir="script_output", type="Release", tra
         "cmake",
         f"-DCMAKE_BUILD_TYPE={type}",
         f"-DTRACKING_ENABLED={'ON' if tracking else 'OFF'}",
-        *[f"-D{arg_name}={arg_value}" for arg_name, arg_value in kwargs.items()],
         project_root
     ]
     subprocess.run(cmake_command, check=True)

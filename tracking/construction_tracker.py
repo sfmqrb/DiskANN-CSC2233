@@ -198,7 +198,7 @@ if __name__ == "__main__":
         alpha = experiment['alpha']
         l_build=experiment['l_build']
 
-        title = f"R{str(r)}_L{str(l_build)}_A{str(alpha).replace(".","-")}{"_SAT" if experiment['saturate_graph'] else ""}"
+        title = f"R{str(r)}_L{str(l_build)}_A{str(alpha).replace('.','-')}{'_SAT' if experiment['saturate_graph'] else ''}"
         exp_folder = os.path.join(sift_folder, title)
         os.makedirs(exp_folder,exist_ok=True)
 
