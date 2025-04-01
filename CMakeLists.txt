@@ -45,13 +45,12 @@ if(ISOLATE_ALPHA)
     message("Building for ISOLATE_ALPHA.")
 endif()
 
-<<<<<<< HEAD
 if(TWO_PASS_INDEXING)
     message("Building for TWO_PASS_INDEXING.")
-=======
+endif()
+
 if(KNN_INDEX)
     message("Building for KNN_INDEX.")
->>>>>>> f7f643126e9d03f0f908dcafefc87352f5f0e8c1
 endif()
 
 # Install nuget packages for dependencies.
@@ -256,7 +255,7 @@ if (MSVC)
                             /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
                             /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
                         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/gperftools)
- 
+
     add_library(libtcmalloc_minimal_for_exe STATIC IMPORTED)
     add_library(libtcmalloc_minimal_for_dll STATIC IMPORTED)
 
@@ -301,7 +300,7 @@ if(MSVC)
     # Linker options. Exclude VCOMP/VCOMPD.LIB which contain VisualStudio's version of OpenMP.
     # MKL was linked against Intel's OpenMP and depends on the corresponding DLL.
     add_link_options(/NODEFAULTLIB:VCOMP.LIB /NODEFAULTLIB:VCOMPD.LIB /DEBUG:FULL /OPT:REF /OPT:ICF)
-	
+
 	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
 	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
 	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
