@@ -166,84 +166,75 @@ if __name__ == "__main__":
 
     build_memory_index = os.path.join(apps_dir, "build_memory_index")
 
-    base_file_name = "sift_learn.fbin"
+    base_file_names = ["sift_query.fbin", "sift_30000.fbin", "sift_learn.fbin", "sift_300000.fbin", "sift_base.fbin"]
 
     # Paths to dataset files
-    base_file = os.path.join(sift_folder, base_file_name)
+    for base_file_name in base_file_names:
+        base_file = os.path.join(sift_folder, base_file_name)
 
-    tracker = ConstructionTrackingRunner(build_memory_index,
-                                         metric_handlers=[AddEdgeCountTracker(), NodeDistanceTracker()])
+        tracker = ConstructionTrackingRunner(build_memory_index,
+                                             metric_handlers=[AddEdgeCountTracker(), NodeDistanceTracker()])
 
 
-    tracking_port = 5555
-    print_out = True
+        tracking_port = 5555
+        print_out = True
 
-    experiments = [
-        {
-            'r':32,
-            'l_build': 50,
-            'alpha': 1.2,
-            "saturate_graph": True,
-        },
-        {
-            'r':32,
-            'l_build': 50,
-            'alpha': 1.2,
-            "saturate_graph": False,
-        },
-    ]
-
-    for experiment in experiments:
-        r = experiment['r']
-        alpha = experiment['alpha']
-        l_build=experiment['l_build']
-
-        title = f"R{str(r)}_L{str(l_build)}_A{str(alpha).replace('.','-')}{'_SAT' if experiment['saturate_graph'] else ''}"
-        exp_folder = os.path.join(sift_folder, title)
-        os.makedirs(exp_folder,exist_ok=True)
-
-        index_path = os.path.join(exp_folder, "index")
-
-        # Build command with all the arguments
-        command = [
-            build_memory_index,
-            "--data_type", "float",
-            "--dist_fn", "l2",
-            "--data_path", base_file,
-            "--index_path_prefix", index_path,
-            "-R", str(r),
-            "-L", str(l_build),
-            "--alpha", str(alpha),
-            "--num_threads", "1",
-            "--tracking_addr", f"tcp://localhost:{tracking_port}",
-            "--saturate_graph" if "saturate_graph" in experiment and experiment["saturate_graph"] else "",
+        experiments = [
+            {
+                'r': 64,
+                'l_build': 50,
+                'alpha': 1.2,
+                "saturate_graph": False,
+            },
         ]
 
-        print(command)
+        for experiment in experiments:
+            r = experiment['r']
+            alpha = experiment['alpha']
+            l_build=experiment['l_build']
 
-        def trace_function():
-            process = subprocess.Popen(
-                command,
-                stdout=None if print_out else subprocess.DEVNULL,
-                stderr=None if print_out else subprocess.DEVNULL,
-                text=True
-            )
+            title = f"R{str(r)}_L{str(l_build)}_A{str(alpha).replace('.','-')}{'_SAT' if experiment['saturate_graph'] else ''}"
+            exp_folder = os.path.join(sift_folder, title)
+            os.makedirs(exp_folder,exist_ok=True)
 
-            # Wait for completion
-            process.wait()
+            index_name = f"index_{base_file_name.replace('.fbin','')}"
+            index_path = os.path.join(exp_folder, index_name)
 
-            # Give time for any final messages to be received
-            time.sleep(1)
+            # Build command with all the arguments
+            command = [
+                build_memory_index,
+                "--data_type", "float",
+                "--dist_fn", "l2",
+                "--data_path", base_file,
+                "--index_path_prefix", index_path,
+                "-R", str(r),
+                "-L", str(l_build),
+                "--alpha", str(alpha),
+                "--num_threads", "1",
+                "--tracking_addr", f"tcp://localhost:{tracking_port}",
+                "--saturate_graph" if "saturate_graph" in experiment and experiment["saturate_graph"] else "",
+            ]
 
-            return {
-                "exit_code": process.returncode,
-            }
+            print(command)
 
-        tracker.trace_program(title, trace_function, tracking_port=tracking_port)
+            def trace_function():
+                process = subprocess.Popen(
+                    command,
+                    stdout=None if print_out else subprocess.DEVNULL,
+                    stderr=None if print_out else subprocess.DEVNULL,
+                    text=True
+                )
 
+                # Wait for completion
+                process.wait()
 
-    tracker.generate_text()
+                # Give time for any final messages to be received
+                time.sleep(1)
 
-    tracker.generate_graphs()
+                return {
+                    "exit_code": process.returncode,
+                }
 
+            tracker.trace_program(title, trace_function, tracking_port=tracking_port)
 
+            tracker.generate_text()
