@@ -35,7 +35,6 @@ class Timed:
             self.print_(f"elapsed {self.time_elapsed_:.5f} seconds")
         if exc_type is not None:
             print("".join(traceback.format_exception(exc_type, exc_value, exc_tb)), file=sys.stderr)
-            raise Exception("benchmark failed")
 
     def time_elapsed(self):
         return self.time_elapsed_
@@ -48,9 +47,10 @@ def binded_print(*args):
     return _print
 
 
-def generate_key(params, prefix=""):
+def generate_key(params, prefix="", excluded_keys=()):
     results = []
     for k, v in params.items():
+        if k in excluded_keys: continue
         if isinstance(v, list):
             v = "-".join([str(vi) for vi in v])
         results.append(f"{k}{v}")
@@ -60,8 +60,8 @@ def generate_key(params, prefix=""):
     return "_".join(results)
 
 
-def generate_keys(params_list, prefix=""):
-    return [generate_key(params, prefix) for params in params_list]
+def generate_keys(params_list, **kwargs):
+    return [generate_key(params, **kwargs) for params in params_list]
 
 
 def get_as_list(dict_, key, default):
@@ -154,7 +154,7 @@ def generate_random_dataset(rand_data_gen, output_dir, n_name, N, D=128):
 
 
 def run_build_step(state, temp_state, trans_state, isolate_alpha, tracking):
-    project_root = state["project_root"]
+    project_root = temp_state["project_root"]
     build_key = trans_state["build_key"]
     build_path = os.path.join(project_root, "build", build_key)
     data_path = os.path.join(project_root, "build", "data")
@@ -164,16 +164,16 @@ def run_build_step(state, temp_state, trans_state, isolate_alpha, tracking):
         temp_state["recent_builds"].add(build_path)
     sift_data_path = os.path.join(data_path, "sift")
     rand_data_path = os.path.join(data_path, "rand")
-    if "sift" in trans_state["required_datasets"] and "sift" not in temp_state["dataset"]:
+    if "sift" in temp_state["required_datasets"] and "sift" not in temp_state["recent_datasets"]:
         download_sift(data_path, os.path.join(build_path, "apps"))
-        temp_state["dataset"].add("sift")
-    if "rand" in trans_state["required_datasets"] and "rand" not in temp_state["dataset"]:
+        temp_state["recent_datasets"].add("sift")
+    if "rand" in temp_state["required_datasets"] and "rand" not in temp_state["recent_datasets"]:
         rand_data_gen = os.path.join(build_path, "apps", "utils", "rand_data_gen")
         generate_random_dataset(rand_data_gen, rand_data_path, "1k", N=1_000, D=128)
         generate_random_dataset(rand_data_gen, rand_data_path, "10k", N=10_000, D=128)
         generate_random_dataset(rand_data_gen, rand_data_path, "1m", N=1_000_000, D=128)
         generate_random_dataset(rand_data_gen, rand_data_path, "10m", N=10_000_000, D=128)
-        temp_state["dataset"].add("rand")
+        temp_state["recent_datasets"].add("rand")
     trans_state.update({
         "build_path": build_path,
         "sift_data_path": sift_data_path,
@@ -267,7 +267,7 @@ def index_benchmark_exist(state, build_key, index_key):
 
 
 def run_index_step(state, temp_state, trans_state, data, l, r, alpha, saturate_graph, use_existing_index=True):
-    project_root: str = state["project_root"]
+    project_root: str = temp_state["project_root"]
     build_key = trans_state["build_key"]
     index_key = trans_state["index_key"]
     index_base_path: str = os.path.join(project_root, "build", build_key, index_key)
@@ -328,15 +328,15 @@ def extract_query_step_data(out_files):
             for line in file:
                 match = pattern.match(line)
                 if match:
-                    l, qps, avg_dist_cmps, mean_lat, p99_lat, recall10 = (float(match.group(i)) for i in
-                                                                          range(1, 7))
+                    l, qps, avg_dist_cmps, mean_lat, p99_lat, recall = (float(match.group(i)) for i in
+                                                                        range(1, 7))
                     data.append({
                         "l": l,
                         "QPS": qps,
                         "average_distance_compare": avg_dist_cmps,
                         "mean_latency": mean_lat,
                         "p99_latency": p99_lat,
-                        "recall@10": recall10
+                        "recall": recall
                     })
     return data
 
@@ -362,7 +362,7 @@ def get_ground_truth(state, temp_state, trans_state, data_file: str, query_data_
 
 
 def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k, l):
-    project_root: str = state["project_root"]
+    project_root: str = temp_state["project_root"]
     build_key = trans_state["build_key"]
     index_key = trans_state["index_key"]
     query_base_path: str = os.path.join(project_root, "build", build_key, index_key, query_key)
@@ -397,7 +397,6 @@ def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k,
         run_stdouts.append(stdout)
         bin_file_pattern = os.path.join(query_run_path, 'result*.bin')
         run_result_bin_files.extend(glob.glob(bin_file_pattern))
-    print(run_result_bin_files)
 
     expr_data = extract_query_step_data(run_stdouts)
     expr_data_key = f"{build_key}_{index_key}_{query_key}"
@@ -413,17 +412,32 @@ def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k,
 def run_serialized_benchmarks(project_root, params, last_state=None, dry_run=False, forced_run_all=False,
                               use_existing_index=True, delete_index_after_query=True):
     # relays on stateful system:
-    # - state: persisted states
+    # - persist_state: persisted states
     # - temp_state: temporary states, exist across different benchmarks
     # - trans_state: transient states, only exist across benchmark steps (in one benchmark)
-    if last_state is not None:
-        state = last_state
-    else:
-        state = {"project_root": project_root}
-    try:
-        temp_state = {"recent_builds": set(), "dataset": set()}
+
+    def benchmark_main(state):
+        # collect required dataset
+        referenced_datasets = set()
+        for _, index_param, query_params in params:
+            referenced_datasets.add(index_param["data"])
+            for query_param in query_params:
+                referenced_datasets.add(query_param["data"])
+        required_datasets = []
+        if any(ds.startswith("sift") for ds in referenced_datasets):
+            required_datasets.append("sift")
+        if any(ds.startswith("rand") for ds in referenced_datasets):
+            required_datasets.append("rand")
+
+        # temporary states, exist across different benchmarks (not persisted)
+        temp_state = {"project_root": project_root,
+                      "recent_builds": set(),
+                      "recent_datasets": set(),
+                      "required_datasets": required_datasets}
+
         num_benchmarks = len(params)
-        print(f"Collected {num_benchmarks} benchmarks.")
+        num_sub_benchmarks = sum(qp["num_runs"] for _, _, query_params in params for qp in query_params)
+        print(f"Collected {num_benchmarks} benchmarks, including {num_sub_benchmarks} sub benchmarks.")
         accum_elapsed_time = 0.
         accum_num_benchmarks = 0
         for i, (build_param, index_param, query_params) in enumerate(params):
@@ -443,7 +457,7 @@ def run_serialized_benchmarks(project_root, params, last_state=None, dry_run=Fal
             # check can skip
             build_key = generate_key(build_param, prefix="build")
             index_key = generate_key(index_param, prefix="index")
-            query_keys = generate_keys(query_params, prefix="query")
+            query_keys = generate_keys(query_params, prefix="query", excluded_keys={"num_runs", "l"})
             trans_state["build_key"] = build_key
             trans_state["index_key"] = index_key
             if (not forced_run_all
@@ -451,14 +465,6 @@ def run_serialized_benchmarks(project_root, params, last_state=None, dry_run=Fal
                     and query_benchmark_exist(state, build_key, index_key, *query_keys)):
                 print("Skipped {}/{}, data already exists".format(i + 1, num_benchmarks))
                 continue
-
-            # collect required dataset
-            required_datasets = []
-            if any(ds.startswith("sift") for ds in [index_param["data"], query_params["data"]]):
-                required_datasets.append("sift")
-            if any(ds.startswith("rand") for ds in [index_param["data"], query_params["data"]]):
-                required_datasets.append("rand")
-            trans_state["required_datasets"] = required_datasets
 
             total_elapsed_time = 0.
 
@@ -496,11 +502,16 @@ def run_serialized_benchmarks(project_root, params, last_state=None, dry_run=Fal
             estimated_time_remain = (accum_elapsed_time / accum_num_benchmarks) * (num_benchmarks - i - 1)
             print("Completed {}/{}, estimated remaining {}".format(i + 1, num_benchmarks, datetime.timedelta(
                 seconds=estimated_time_remain)))
+
+    persist_state = last_state if last_state is not None else {}
+    try:
+        with Timed(binded_print("Benchmark main loop")):
+            benchmark_main(persist_state)
     except Exception as e:
         print("run_serialized_benchmarks stopped early due to exception")
         print(e)
     finally:
-        return state
+        return persist_state
 
 
 def save_state(state_dict, out_dir):
@@ -574,7 +585,7 @@ def flatten_index_param(build_param, index_param, _):
 
 def query_param_to_key(build_param, index_param, query_param):
     return "{}_{}_{}".format(generate_key(build_param, "build"), generate_key(index_param, "index"),
-                             generate_key(query_param, "query"))
+                             generate_key(query_param, "query", excluded_keys={"num_runs", "l"}))
 
 
 def flatten_query_param(build_param, index_param, query_param):
@@ -598,7 +609,7 @@ PLOT_COLORS = ["lightcoral", "red", "lightgreen", "green", "lightblue", "blue", 
 PLOT_COLORS_2 = ["red", "green", "blue", "purple", "darkorange", "saddlebrown"]
 
 
-def plot_construction_benchmark(df: pd.DataFrame, columns):
+def plot_construction_benchmark(df: pd.DataFrame, columns, name_prefix):
     all_index_l = sorted(df["index_l"].unique())
     all_alpha = sorted(df["index_alpha"].unique())
     all_index_r = sorted(df["index_r"].unique())
@@ -636,10 +647,10 @@ def plot_construction_benchmark(df: pd.DataFrame, columns):
     legend_ax.axis('off')
     legend_ax.legend(handles, labels, loc='right', title="Legend")
     fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
-    plt.savefig(f"construction_benchmark.png", bbox_inches="tight")
+    plt.savefig("{}_query_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
 
 
-def plot_query_benchmark(df: pd.DataFrame, columns):
+def plot_query_benchmark(df: pd.DataFrame, columns, name_prefix):
     all_index_l = sorted(df["index_l"].unique())
     all_alpha = sorted(df["index_alpha"].unique())
     all_index_r = sorted(df["index_r"].unique())
@@ -683,7 +694,7 @@ def plot_query_benchmark(df: pd.DataFrame, columns):
     legend_ax.axis('off')
     legend_ax.legend(handles, labels, loc='right', title="Legend")
     fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
-    plt.savefig(f"query_benchmark.png", bbox_inches="tight")
+    plt.savefig("{}_query_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
 
 
 def dominates(a, b, objectives):
@@ -796,87 +807,43 @@ def plot_pareto_frontier(index_df: pd.DataFrame, query_df: pd.DataFrame,
     legend_ax.axis('off')
     legend_ax.legend(handles, labels, loc='right', title="Legend")
     fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
-    plt.savefig("{}_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
+    plt.savefig("{}_pareto_frontier_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
 
 
-if __name__ == '__main__':
+def run_benchmarks(param, **kwargs):
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    alpha_one_to_one_point_six = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6]
-    alpha_one_to_two = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.55, 1.6, 1.65, 1.7,
-                        1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
-    grouped_param = group_benchmark_params([
-        # ============ Sift benchmarks ============
-        # {  # building parameters
-        #     "build_isolate_alpha": ["On", "Off"],
-        #     "build_tracking": False,
-        #     # indexing parameters
-        #     "index_data": "sift_query.fbin",  # ======================== TODO
-        #     "index_l": [25, 50, 75],
-        #     "index_r": [64],
-        #     "index_alpha": alpha_one_to_two,
-        #     # query parameters
-        #     "query_num_runs": 5,
-        #     "query_data": "sift_query.fbin",
-        #     "query_l": [10, 50],
-        #     "query_k": [10], },
-        {  # building parameters
-            "build_isolate_alpha": ["On", "Off"],
-            "build_tracking": False,
-            # indexing parameters
-            "index_data": "sift_learn.fbin",  # ======================== TODO
-            "index_l": [10, 50, 100],
-            "index_r": [32, 64],
-            "index_alpha": alpha_one_to_one_point_six,
-            # query parameters
-            "query_num_runs": 3,
-            "query_data": ["sift_query.fbin", "sift_learn.fbin"],
-            "query_l": [10, 50, 100],
-            "query_k": [10], },
-        # ============ Random benchmarks ============
-        # {"build_isolate_alpha": ["On", "Off"],
-        #  "build_tracking": False,
-        #  # indexing parameters
-        #  "index_data": "rand_128_1m.fbin",
-        #  "index_l": [10, 50, 100],
-        #  "index_r": [32, 64],
-        #  "index_alpha": alpha_one_to_one_point_six,
-        #  # query parameters
-        #  "query_num_runs": 5,
-        #  "query_data": "rand_128_10k.fbin",
-        #  "query_l": [10, 50, 100],
-        #  "query_k": 10, }
-    ])
-    state = None
-    # state = run_serialized_benchmarks(project_root, grouped_param,
-    #                                   dry_run=False, last_state=state,
-    #                                   use_existing_index=False, delete_index_after_query=True)
-    # save_state(state, project_root)
+    state = run_serialized_benchmarks(project_root, param, **kwargs)
+    return save_state(state, project_root)
 
-    # plotting benchmarks
-    states = [
-        # load_state("/home/hongchengw/DiskANN-CSC2233/state_20250331_190748.json"),
-        load_state("/home/hongchengw/DiskANN-CSC2233/state_20250330_085551.json"),
-        load_state("/home/hongchengw/DiskANN-CSC2233/state_20250330_140500.json"),
-    ]
+
+def consolidate_data(param, *state_files):
+    states = [load_state(state_file) for state_file in state_files]
+    if len(states) == 0:
+        return None, None
     index_df = combine_states_to_df(*[state["index_raw_data"] for state in states],
-                                    params=grouped_param, params_to_key=index_param_to_key,
+                                    params=param, params_to_key=index_param_to_key,
                                     flatten_param=flatten_index_param)
+    print(f"Loaded {index_df.shape[0]} data points for index.")
     query_df = combine_states_to_df(*[state["query_raw_data"] for state in states],
-                                    params=grouped_param, params_to_key=query_param_to_key,
+                                    params=param, params_to_key=query_param_to_key,
                                     flatten_param=flatten_query_param, subkeys=["l"], subkeys_as=["query_l"])
+    print(f"Loaded {query_df.shape[0]} data points for query.")
+    return index_df, query_df
 
+
+def plot_benchmarks(index_df, query_df, name_prefix):
     # index construction benchmarks
     index_plot_columns = ["indexing_time_seconds", "index_size_byte", "index_data_size_byte", "max_degree",
                           "avg_degree", "min_degree", "count_deg_lt_2"]
-    plot_construction_benchmark(index_df, index_plot_columns)
+    plot_construction_benchmark(index_df, index_plot_columns, name_prefix=name_prefix)
 
     # query benchmarks
-    query_plot_columns = ["QPS", "average_distance_compare", "mean_latency", "p99_latency", "recall@10"]
-    plot_query_benchmark(query_df, query_plot_columns)
+    query_plot_columns = ["QPS", "average_distance_compare", "mean_latency", "p99_latency", "recall"]
+    plot_query_benchmark(query_df, query_plot_columns, name_prefix=name_prefix)
 
     # column comparisons, plotted on pareto frontier
     # column_name, column_objective (min/max), column_sources (query/index)
-    recall10_col = ("recall@10", "max", "query")
+    recall_col = ("recall", "max", "query")
     QPS_col = ("QPS", "max", "query")
     p99_latency_col = ("p99_latency", "min", "query")
     mean_latency_col = ("mean_latency", "min", "query")
@@ -885,7 +852,110 @@ if __name__ == '__main__':
     index_size_byte_col = ("index_size_byte", "min", "index")
     plot_pareto_frontier(index_df, query_df, compare_columns=[
         # column_x, column_y, plot_pareto
-        (recall10_col, QPS_col, True),
-        (recall10_col, mean_latency_col, True),
+        (recall_col, QPS_col, True),
+        (recall_col, mean_latency_col, True),
         (QPS_col, index_size_byte_col, False),
-    ], name_prefix="compare")
+    ], name_prefix=name_prefix)
+    print("Plotted", name_prefix)
+
+
+alpha_one_to_one_point_six = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6]
+alpha_one_to_two = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.55, 1.6, 1.65, 1.7,
+                    1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
+
+if __name__ == '__main__':
+    grouped_param = group_benchmark_params([
+        # ============ Sift benchmarks ============
+        {  # building parameters
+            "build_isolate_alpha": ["On", "Off"],
+            "build_tracking": False,
+            # indexing parameters
+            "index_data": "sift_base.fbin",
+            "index_l": [25, 50, 75],
+            "index_r": [64],
+            "index_alpha": alpha_one_to_two,
+            # query parameters
+            "query_num_runs": 5,
+            "query_data": "sift_query.fbin",
+            "query_l": [10, 50],
+            "query_k": [10], },
+        {  # building parameters
+            "build_isolate_alpha": ["On", "Off"],
+            "build_tracking": False,
+            # indexing parameters
+            "index_data": "sift_base.fbin",
+            "index_l": [25, 50, 75],
+            "index_r": [64],
+            "index_alpha": alpha_one_to_two,
+            # query parameters
+            "query_num_runs": 5,
+            "query_data": "sift_query.fbin",
+            "query_l": [50, 100],
+            "query_k": [50], },
+        # ============ Random benchmarks ============
+        # {  # building parameters
+        #     "build_isolate_alpha": ["On", "Off"],
+        #     "build_tracking": False,
+        #     # indexing parameters
+        #     "index_data": "rand_128_1m.fbin",
+        #     "index_l": [25, 50, 75],
+        #     "index_r": [64],
+        #     "index_alpha": alpha_one_to_two,
+        #     # query parameters
+        #     "query_num_runs": 5,
+        #     "query_data": "rand_128_10k.fbin",
+        #     "query_l": [10, 50],
+        #     "query_k": 10, },
+        # {  # building parameters
+        #     "build_isolate_alpha": ["On", "Off"],
+        #     "build_tracking": False,
+        #     # indexing parameters
+        #     "index_data": "rand_128_1m.fbin",
+        #     "index_l": [25, 50, 75],
+        #     "index_r": [64],
+        #     "index_alpha": alpha_one_to_two,
+        #     # query parameters
+        #     "query_num_runs": 5,
+        #     "query_data": "rand_128_10k.fbin",
+        #     "query_l": [50, 100],
+        #     "query_k": 50, },
+    ])
+    run_benchmarks(
+        grouped_param,
+        dry_run=False,
+        last_state=None,
+        use_existing_index=False,
+        delete_index_after_query=True
+    )
+    index_df, query_df = consolidate_data(
+        grouped_param,
+        # "/home/hongchengw/DiskANN-CSC2233/state_20250330_085551.json",
+        # "/home/hongchengw/DiskANN-CSC2233/state_20250330_140500.json",
+    )
+    if index_df is not None and query_df is not None:
+        plot_benchmarks(
+            index_df[index_df["index_data"] == "sift_base.fbin"],
+            query_df[(query_df["index_data"] == "sift_base.fbin") &
+                     (query_df["query_k"] == 10)],
+            name_prefix="sift1m_k10"
+        )
+        plot_benchmarks(
+            index_df[index_df["index_data"] == "sift_base.fbin"],
+            query_df[(query_df["index_data"] == "sift_base.fbin") &
+                     (query_df["query_k"] == 50)],
+            name_prefix="sift1m_k50"
+        )
+        plot_benchmarks(
+            index_df[index_df["index_data"] == "rand_128_1m.fbin"],
+            query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
+                     (query_df["query_k"] == 10)],
+            name_prefix="rand1m_k10"
+        )
+        plot_benchmarks(
+            index_df[index_df["index_data"] == "rand_128_1m.fbin"],
+            query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
+                     (query_df["query_k"] == 50)],
+            name_prefix="rand1m_k50"
+        )
+    else:
+        print("None plotted.")

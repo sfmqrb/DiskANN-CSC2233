@@ -1,5 +1,5 @@
 import os
-import subprocess 
+import subprocess
 from pathlib import Path
 import matplotlib.pyplot as plt
 import struct
@@ -103,7 +103,7 @@ def download_sift(base_dir, apps_dir):
 
     print("SIFT dataset is ready.")
 
-def create_build(project_root, build_subdir="script_output", type="Release", tracking=True):
+def create_build(project_root, build_subdir="script_output", type="Release", tracking=True, **kwargs):
     # Define the build directory (inside `build/`)
     build_dir = os.path.join(project_root, "build", build_subdir)
 
@@ -117,6 +117,7 @@ def create_build(project_root, build_subdir="script_output", type="Release", tra
         "cmake",
         f"-DCMAKE_BUILD_TYPE={type}",
         f"-DTRACKING_ENABLED={'ON' if tracking else 'OFF'}",
+        *[f"-D{arg_name}={arg_value}" for arg_name, arg_value in kwargs.items()],
         project_root
     ]
     subprocess.run(cmake_command, check=True)
