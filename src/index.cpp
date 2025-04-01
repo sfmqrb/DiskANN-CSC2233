@@ -1087,7 +1087,7 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // - Fixed two sweep over the pool (though the paper uses one sweep).
     constexpr int max_sweep = 2;
     int count = 0;
-    float cur_alpha = alpha;
+    float cur_alpha = 1.0;
     while (count < max_sweep && result.size() < degree)
 #else
     float cur_alpha = 1;
@@ -1164,6 +1164,7 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
         }
 #ifdef ISOLATE_ALPHA
         ++count;
+        cur_alpha = alpha;
 #else
         cur_alpha *= 1.2f;
 #endif
