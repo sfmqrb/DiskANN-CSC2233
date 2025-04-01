@@ -33,12 +33,18 @@ option(TRACKING_ENABLED "Enable the socket-based tracking instrumentation" OFF)
 
 option(ISOLATE_ALPHA "Enable ISOLATE_ALPHA flag, controls how alpha in robust prune is applied" OFF)
 
+option(KNN_INDEX "Enable KNN_INDEX flag, controls how many emperical KNNs are garanteed to be connected to each node" OFF)
+
 if(TRACKING_ENABLED)
     add_definitions(-DDISKANN_TRACKING_ENABLED)
 endif()
 
 if(ISOLATE_ALPHA)
     message("Building for ISOLATE_ALPHA.")
+endif()
+
+if(KNN_INDEX)
+    message("Building for KNN_INDEX.")
 endif()
 
 # Install nuget packages for dependencies.

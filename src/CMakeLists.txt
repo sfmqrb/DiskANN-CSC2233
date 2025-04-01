@@ -49,6 +49,11 @@ else()
         target_compile_definitions(${PROJECT_NAME} PRIVATE ISOLATE_ALPHA)
         target_compile_definitions(${PROJECT_NAME}_s PRIVATE ISOLATE_ALPHA)
     endif()
+
+    if(KNN_INDEX)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE KNN_INDEX=${KNN_INDEX})
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE KNN_INDEX=${KNN_INDEX})
+    endif()
 endif()
 
 if (NOT MSVC)
