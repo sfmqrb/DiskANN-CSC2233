@@ -1320,40 +1320,50 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer link_timer;
 
-#pragma omp parallel for schedule(dynamic, 2048)
-    for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
+#ifdef TWO_PASS_INDEXING
+    for (uint32_t currIndexingQueueSize : {_indexingQueueSize / 2, _indexingQueueSize})
     {
-        auto node = visit_order[node_ctr];
-
-        // Find and add appropriate graph edges
-        ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
-        auto scratch = manager.scratch_space();
-        std::vector<uint32_t> pruned_list;
-        if (_filtered_index)
+#else
+    uint32_t currIndexingQueueSize = _indexingQueueSize;
+#endif
+#pragma omp parallel for schedule(dynamic, 2048)
+        for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
         {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
-        }
-        else
-        {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
-        }
-        assert(pruned_list.size() > 0);
+            auto node = visit_order[node_ctr];
 
-        {
-            LockGuard guard(_locks[node]);
+            // Find and add appropriate graph edges
+            ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+            auto scratch = manager.scratch_space();
+            std::vector<uint32_t> pruned_list;
+            if (_filtered_index)
+            {
+                search_for_point_and_prune(node, currIndexingQueueSize, pruned_list, scratch, true,
+                                           _filterIndexingQueueSize);
+            }
+            else
+            {
+                search_for_point_and_prune(node, currIndexingQueueSize, pruned_list, scratch);
+            }
+            assert(pruned_list.size() > 0);
 
-            _graph_store->set_neighbours(node, pruned_list);
-            assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
+            {
+                LockGuard guard(_locks[node]);
+
+                _graph_store->set_neighbours(node, pruned_list);
+                assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
+            }
+
+            inter_insert(node, pruned_list, scratch);
+
+            if (node_ctr % 100000 == 0)
+            {
+                diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
+                              << std::flush;
+            }
         }
-
-        inter_insert(node, pruned_list, scratch);
-
-        if (node_ctr % 100000 == 0)
-        {
-            diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
-                          << std::flush;
-        }
+#ifdef TWO_PASS_INDEXING
     }
+#endif
 
     if (_nd > 0)
     {
@@ -1574,7 +1584,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
         min = std::min(min, pool.size());
         total += pool.size();
         std::vector<float> distances = {};
-        for (auto neighbor: pool)
+        for (auto neighbor : pool)
         {
             distances.push_back(_data_store->get_distance(i, neighbor));
         }

@@ -49,6 +49,11 @@ else()
         target_compile_definitions(${PROJECT_NAME} PRIVATE ISOLATE_ALPHA)
         target_compile_definitions(${PROJECT_NAME}_s PRIVATE ISOLATE_ALPHA)
     endif()
+
+    if(TWO_PASS_INDEXING)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE TWO_PASS_INDEXING)
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE TWO_PASS_INDEXING)
+    endif()
 endif()
 
 if (NOT MSVC)

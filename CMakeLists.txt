@@ -33,12 +33,18 @@ option(TRACKING_ENABLED "Enable the socket-based tracking instrumentation" OFF)
 
 option(ISOLATE_ALPHA "Enable ISOLATE_ALPHA flag, controls how alpha in robust prune is applied" OFF)
 
+option(TWO_PASS_INDEXING "Enable TWO_PASS_INDEXING flag, controls if two pass index construction is applied" OFF)
+
 if(TRACKING_ENABLED)
     add_definitions(-DDISKANN_TRACKING_ENABLED)
 endif()
 
 if(ISOLATE_ALPHA)
     message("Building for ISOLATE_ALPHA.")
+endif()
+
+if(TWO_PASS_INDEXING)
+    message("Building for TWO_PASS_INDEXING.")
 endif()
 
 # Install nuget packages for dependencies.
