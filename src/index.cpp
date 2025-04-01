@@ -3,6 +3,9 @@
 
 #include <omp.h>
 
+#include <stdexcept>
+#include <string>
+
 #include <type_traits>
 
 #include "boost/dynamic_bitset.hpp"
@@ -1080,7 +1083,9 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
+    bool is_alpha = false;
 #ifdef ISOLATE_ALPHA
+    is_alpha = true; 
     // ISOLATE_ALPHA flag changes the behaviour of robust prune to better align with the paper's description.
     // Changes the following:
     // - Directly apply the user defined alpha.
@@ -1168,6 +1173,31 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
 #else
         cur_alpha *= 1.2f;
 #endif
+    }
+    // After the main procedure, ensure the top_k closest (from the sorted pool) are in the result.
+    size_t top_k;
+#ifdef KNN_INDEX
+    top_k = (int)KNN_INDEX;
+#else
+    top_k = 0;
+#endif
+    // std::cout << "Top K: " << top_k << std::endl;
+    // std::cout << "IS_ALPHA: " << is_alpha << std::endl;
+    if (result.size() < degree)
+    {
+        size_t num_top = std::min((size_t)top_k, pool.size());
+        for (size_t i = 0; i < num_top && result.size() < degree; i++)
+        {
+            // Skip self loop
+            if (pool[i].id == location)
+                continue;
+            // Add candidate if not already in the result
+            if (std::find(result.begin(), result.end(), pool[i].id) == result.end())
+            {
+                if (delete_set_ptr == nullptr || delete_set_ptr->find(pool[i].id) == delete_set_ptr->end())
+                    result.push_back(pool[i].id);
+            }
+        }
     }
 }
 

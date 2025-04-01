@@ -35,6 +35,8 @@ option(ISOLATE_ALPHA "Enable ISOLATE_ALPHA flag, controls how alpha in robust pr
 
 option(TWO_PASS_INDEXING "Enable TWO_PASS_INDEXING flag, controls if two pass index construction is applied" OFF)
 
+option(KNN_INDEX "Enable KNN_INDEX flag, controls how many emperical KNNs are garanteed to be connected to each node" OFF)
+
 if(TRACKING_ENABLED)
     add_definitions(-DDISKANN_TRACKING_ENABLED)
 endif()
@@ -43,8 +45,13 @@ if(ISOLATE_ALPHA)
     message("Building for ISOLATE_ALPHA.")
 endif()
 
+<<<<<<< HEAD
 if(TWO_PASS_INDEXING)
     message("Building for TWO_PASS_INDEXING.")
+=======
+if(KNN_INDEX)
+    message("Building for KNN_INDEX.")
+>>>>>>> f7f643126e9d03f0f908dcafefc87352f5f0e8c1
 endif()
 
 # Install nuget packages for dependencies.

@@ -54,6 +54,11 @@ else()
         target_compile_definitions(${PROJECT_NAME} PRIVATE TWO_PASS_INDEXING)
         target_compile_definitions(${PROJECT_NAME}_s PRIVATE TWO_PASS_INDEXING)
     endif()
+
+    if(KNN_INDEX)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE KNN_INDEX=${KNN_INDEX})
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE KNN_INDEX=${KNN_INDEX})
+    endif()
 endif()
 
 if (NOT MSVC)
