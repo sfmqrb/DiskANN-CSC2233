@@ -647,7 +647,7 @@ def plot_construction_benchmark(df: pd.DataFrame, columns, name_prefix):
     legend_ax.axis('off')
     legend_ax.legend(handles, labels, loc='right', title="Legend")
     fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
-    plt.savefig("{}_query_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
+    plt.savefig("{}_index_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
 
 
 def plot_query_benchmark(df: pd.DataFrame, columns, name_prefix):
@@ -748,16 +748,17 @@ def plot_pareto_frontier(index_df: pd.DataFrame, query_df: pd.DataFrame,
     all_isolate_alpha = sorted(query_df["build_isolate_alpha"].unique())
     all_query_l = sorted(query_df["query_l"].unique())
     all_query_dataset = sorted(query_df["query_data"].unique())
-    n_row = len(all_index_dataset) * len(all_query_dataset) * len(all_isolate_alpha) * len(all_query_l)
+    n_row = len(all_index_dataset) * len(all_query_dataset) * len(all_query_l)
     n_col = len(compare_columns)
-    fig, axs = plt.subplots(n_row, n_col, figsize=(n_col * 5, n_row * 5), squeeze=False)
-    for plot_row, (index_dataset, query_dataset, isolate_alpha, query_l) in enumerate(
-            itertools.product(all_index_dataset, all_query_dataset, all_isolate_alpha, all_query_l)):
+    fig, axs = plt.subplots(n_row, n_col, figsize=(n_col * 7, n_row * 7), squeeze=False)
+    for plot_row, (index_dataset, query_dataset, query_l) in enumerate(
+            itertools.product(all_index_dataset, all_query_dataset, all_query_l)):
         for plot_col, ((col1_name, col1_objective, col1_src),
                        (col2_name, col2_objective, col2_src),
                        plot_pareto) in enumerate(compare_columns):
-            for line_i, (index_l, index_r) in enumerate(itertools.product(all_index_l, all_index_r)):
-                line_name = f"L_index={index_l}, R_index={index_r}"
+            for line_i, (isolate_alpha, index_l, index_r) in enumerate(
+                    itertools.product(all_isolate_alpha, all_index_l, all_index_r)):
+                line_name = f"isolate_alpha={isolate_alpha}, L_index={index_l}, R_index={index_r}"
                 line_color = PLOT_COLORS_2[line_i % len(PLOT_COLORS_2)]
                 val_data, configs = [], []
                 for index_alpha, in itertools.product(all_alpha):
@@ -796,8 +797,7 @@ def plot_pareto_frontier(index_df: pd.DataFrame, query_df: pd.DataFrame,
                                                      xytext=(0, 0), fontsize=10)
             axs[plot_row][plot_col].set_xlabel(col1_name)
             axs[plot_row][plot_col].set_ylabel(col2_name)
-            axs[plot_row][plot_col].set_title(
-                f"dataset={index_dataset}, {query_dataset}\nisolate_alpha={isolate_alpha}, L_query={query_l}")
+            axs[plot_row][plot_col].set_title(f"L_query={query_l}")
             axs[plot_row][plot_col].grid(True, linestyle='--', alpha=0.7)
 
     # fig.suptitle(fr"$\alpha$-sensitivity benchmark")
@@ -853,7 +853,8 @@ def plot_benchmarks(index_df, query_df, name_prefix):
     plot_pareto_frontier(index_df, query_df, compare_columns=[
         # column_x, column_y, plot_pareto
         (recall_col, QPS_col, True),
-        (recall_col, mean_latency_col, True),
+        (recall_col, average_distance_compare_col, True),
+        # (recall_col, mean_latency_col, True),
         (QPS_col, index_size_byte_col, False),
     ], name_prefix=name_prefix)
     print("Plotted", name_prefix)
@@ -920,17 +921,16 @@ if __name__ == '__main__':
         #     "query_l": [50, 100],
         #     "query_k": 50, },
     ])
-    run_benchmarks(
-        grouped_param,
-        dry_run=False,
-        last_state=None,
-        use_existing_index=False,
-        delete_index_after_query=True
-    )
+    # run_benchmarks(
+    #     grouped_param,
+    #     dry_run=False,
+    #     last_state=None,
+    #     use_existing_index=False,
+    #     delete_index_after_query=True
+    # )
     index_df, query_df = consolidate_data(
         grouped_param,
-        # "/home/hongchengw/DiskANN-CSC2233/state_20250330_085551.json",
-        # "/home/hongchengw/DiskANN-CSC2233/state_20250330_140500.json",
+        "../state_20250401_132510.json",
     )
     if index_df is not None and query_df is not None:
         plot_benchmarks(
@@ -945,17 +945,17 @@ if __name__ == '__main__':
                      (query_df["query_k"] == 50)],
             name_prefix="sift1m_k50"
         )
-        plot_benchmarks(
-            index_df[index_df["index_data"] == "rand_128_1m.fbin"],
-            query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
-                     (query_df["query_k"] == 10)],
-            name_prefix="rand1m_k10"
-        )
-        plot_benchmarks(
-            index_df[index_df["index_data"] == "rand_128_1m.fbin"],
-            query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
-                     (query_df["query_k"] == 50)],
-            name_prefix="rand1m_k50"
-        )
+        # plot_benchmarks(
+        #     index_df[index_df["index_data"] == "rand_128_1m.fbin"],
+        #     query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
+        #              (query_df["query_k"] == 10)],
+        #     name_prefix="rand1m_k10"
+        # )
+        # plot_benchmarks(
+        #     index_df[index_df["index_data"] == "rand_128_1m.fbin"],
+        #     query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
+        #              (query_df["query_k"] == 50)],
+        #     name_prefix="rand1m_k50"
+        # )
     else:
         print("None plotted.")
