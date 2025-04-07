@@ -9,7 +9,34 @@ import re
 import urllib.request
 import tarfile
 
-def extract_fvecs_subset(input_file, output_file, num_vectors):
+import struct
+
+def extract_bvecs_subset(input_file, output_file, num_vectors):
+    """
+    Extract the first num_vectors vectors from a .bvecs file and write them to output_file.
+    The .bvecs format stores each vector as:
+      [4 bytes: dimension (int32, little-endian)]
+      followed by [dimension bytes: uint8 values]
+    """
+    count = 0
+    with open(input_file, 'rb') as fin, open(output_file, 'wb') as fout:
+        while count < num_vectors:
+            # Read the 4-byte header (dimension)
+            header = fin.read(4)
+            if not header:
+                break  # EOF
+            (dim,) = struct.unpack('i', header)
+            fout.write(header)
+
+            # Read vector data (dim uint8 bytes)
+            vector_data = fin.read(dim)
+            if len(vector_data) < dim:
+                break  # Incomplete vector
+            fout.write(vector_data)
+            count += 1
+    print(f"Extracted {count} vectors to {output_file}")
+
+def extract_fvecs_subset(input_file, output_file, num_vectors, step=4):
     """
     Extract the first num_vectors vectors from an .fvecs file and write them to output_file.
     The .fvecs format stores each vector as:
@@ -19,8 +46,8 @@ def extract_fvecs_subset(input_file, output_file, num_vectors):
     count = 0
     with open(input_file, 'rb') as fin, open(output_file, 'wb') as fout:
         while count < num_vectors:
-            # Read the dimension (4 bytes)
-            header = fin.read(4)
+            # Read the dimension (step bytes)
+            header = fin.read(step)
             if not header:
                 break  # Reached end of file
             # Unpack the integer (assumed little-endian)
@@ -28,20 +55,27 @@ def extract_fvecs_subset(input_file, output_file, num_vectors):
             # Write the header to the output file
             fout.write(header)
             # Read the vector (dim floats, each 4 bytes)
-            vector_data = fin.read(dim * 4)
-            if len(vector_data) < dim * 4:
+            vector_data = fin.read(dim * step)
+            if len(vector_data) < dim * step:
                 break  # Incomplete vector encountered; stop processing
             fout.write(vector_data)
             count += 1
     print(f"Extracted {count} vectors to {output_file}")
 
-def extract(base_dir: str, new_vecs: list):
-    extracted_folder = os.path.join(base_dir, "sift")
+def extract(base_dir: str, new_vecs: list, step=4):
 
-    for vec in new_vecs:
-        sift_base_fvecs = os.path.join(extracted_folder, "sift_base.fvecs")
-        sift_new_fvecs = os.path.join(extracted_folder, f"sift_{vec}.fvecs")
-        extract_fvecs_subset(sift_base_fvecs, sift_new_fvecs, vec)
+    for key in new_vecs:
+        vec = new_vecs[key]
+        if step == 4:
+            extracted_folder = os.path.join(base_dir, "sift")
+            sift_base_fvecs = os.path.join(extracted_folder, "sift_base.fvecs")
+            sift_new_fvecs = os.path.join(extracted_folder, f"sift_{key}.fvecs")
+            extract_fvecs_subset(sift_base_fvecs, sift_new_fvecs, vec)
+        if step == 1:
+            extracted_folder = os.path.join(base_dir, "bigann")
+            sift_base_fvecs = os.path.join(extracted_folder, "bigann_learn.bvecs")
+            sift_new_fvecs = os.path.join(extracted_folder, f"bigann_{key}.bvecs")
+            extract_bvecs_subset(sift_base_fvecs, sift_new_fvecs, vec)
 def download_sift(base_dir, apps_dir):
     tar_file_path = os.path.join(base_dir, "sift.tar.gz")
     extracted_folder = os.path.join(base_dir, "sift")
@@ -84,7 +118,7 @@ def download_sift(base_dir, apps_dir):
     else:
         print("Dataset already exists. Skipping download and extraction.")
 
-    extract(base_dir, [30000, 300000])
+    extract(base_dir, {"30000": 30000, "300000": 300000})
     # Convert .fvecs to .fbin if necessary using a for loop.
     # Note: The tuple format is (source_file, target_file, file_label)
     conversions = [
@@ -102,6 +136,60 @@ def download_sift(base_dir, apps_dir):
             print("Conversion complete!")
 
     print("SIFT dataset is ready.")
+def revise_sift1B(base_dir, apps_dir):
+    # Check if the dataset is already extracted
+    # if True:
+    #     return
+
+    extracted_folder = os.path.join(base_dir, "bigann")
+
+    query_bvecs = os.path.join(extracted_folder,       "bigann_query.bvecs")
+    bigann_1M_bvecs = os.path.join(extracted_folder,   "bigann_1M.bvecs")
+    bigann_3M_bvecs = os.path.join(extracted_folder,   "bigann_3M.bvecs")
+    bigann_10M_bvecs = os.path.join(extracted_folder,  "bigann_10M.bvecs")
+    bigann_30M_bvecs = os.path.join(extracted_folder,  "bigann_30M.bvecs")
+    bigann_50M_bvecs = os.path.join(extracted_folder,  "bigann_50M.bvecs")
+    learn_bvecs = os.path.join(extracted_folder, "bigann_learn.bvecs")
+
+    # Create middle sized fvecs
+
+    query_bbin  = os.path.join(extracted_folder,       "bigann_query.bbin")
+    bigann_1M_bbin  = os.path.join(extracted_folder,   "bigann_1M.bbin")
+    bigann_3M_bbin  = os.path.join(extracted_folder,   "bigann_3M.bbin")
+    bigann_10M_bbin = os.path.join(extracted_folder,   "bigann_10M.bbin")
+    bigann_30M_bbin = os.path.join(extracted_folder,   "bigann_30M.bbin")
+    bigann_50M_bbin = os.path.join(extracted_folder,   "bigann_50M.bbin")
+    learn_bbin = os.path.join(extracted_folder,  "bigann_learn.bbin")
+
+    util_dir = os.path.join(apps_dir, 'utils')
+
+    # Ensure the directory exists
+    os.makedirs(base_dir, exist_ok=True)
+
+    extract(base_dir, 
+            {
+            # "1M": 1000000, 
+            #  "3M": 3000000, "10M": 10000000, "30M": 30000000, 
+             "50M": 50000000}, step=1)
+
+    conversions = [
+        # (query_bvecs, query_bbin ,             "bigann_query"),
+        # (bigann_1M_bvecs, bigann_1M_bbin ,     "bigann_1M"),
+        # (bigann_3M_bvecs, bigann_3M_bbin ,     "bigann_3M"),
+        # (bigann_10M_bvecs, bigann_10M_bbin ,   "bigann_10M"),
+        # (bigann_30M_bvecs, bigann_30M_bbin ,   "bigann_30M"),
+        (bigann_50M_bvecs, bigann_50M_bbin ,   "bigann_50M"),
+        # (learn_bvecs, learn_bbin,              "bigann_learn")
+    ]
+
+    for src, dst, label in conversions:
+        if os.path.exists(src) and not os.path.exists(dst):
+            print(f"Converting {label}.bvecs to {label}.bbin...")
+            subprocess.run([os.path.join(util_dir, "fvecs_to_bin"), "uint8", src, dst], check=True)
+            print("Conversion complete!") 
+
+    print("SIFT dataset is ready.")
+
 
 def create_build(project_root, build_subdir="script_output", type="Release", tracking=True, **kwargs):
     # Define the build directory (inside `build/`)
