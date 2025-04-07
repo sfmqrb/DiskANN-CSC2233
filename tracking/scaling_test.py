@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
-from lib.util import create_build, run_and_parse_output, download_sift
+from lib.util import create_build, run_and_parse_output, download_sift, revise_sift1B
 
 
 class Timed:
@@ -166,6 +166,10 @@ def run_build_step(state, temp_state, trans_state, isolate_alpha, knn_index, tra
         temp_state["recent_builds"].add(build_path)
     sift_data_path = os.path.join(data_path, "sift")
     rand_data_path = os.path.join(data_path, "rand")
+    bigann_data_path = os.path.join(data_path, "bigann")
+    if "bigann" in temp_state["required_datasets"] and "bigann" not in temp_state["recent_datasets"]:
+        revise_sift1B(data_path, os.path.join(build_path, "apps"))
+        temp_state["recent_datasets"].add("bigann") 
     if "sift" in temp_state["required_datasets"] and "sift" not in temp_state["recent_datasets"]:
         download_sift(data_path, os.path.join(build_path, "apps"))
         temp_state["recent_datasets"].add("sift")
@@ -180,6 +184,7 @@ def run_build_step(state, temp_state, trans_state, isolate_alpha, knn_index, tra
         "build_path": build_path,
         "sift_data_path": sift_data_path,
         "rand_data_path": rand_data_path,
+        "bigann_data_path": bigann_data_path,
         "build_memory_index": os.path.join(build_path, "apps", "build_memory_index"),
         "search_memory_index": os.path.join(build_path, "apps", "search_memory_index"),
         "compute_groundtruth": os.path.join(build_path, "apps", "utils", "compute_groundtruth"),
@@ -287,7 +292,7 @@ def index_benchmark_exist(state, build_key, index_key):
     return True
 
 
-def run_index_step(state, temp_state, trans_state, data, l, r, alpha, saturate_graph, use_existing_index=True):
+def run_index_step(state, temp_state, trans_state, data, l, r, alpha, saturate_graph, use_existing_index=True, data_type='float'):
     project_root: str = temp_state["project_root"]
     build_key = trans_state["build_key"]
     index_key = trans_state["index_key"]
@@ -300,10 +305,12 @@ def run_index_step(state, temp_state, trans_state, data, l, r, alpha, saturate_g
         # prepare CMD
         build_memory_index = trans_state["build_memory_index"]
         data_path_prefix = trans_state["sift_data_path"] if data.startswith("sift") else trans_state["rand_data_path"]
+        if (data.startswith("bigann")):
+            data_path_prefix = trans_state["bigann_data_path"]
         data_path = os.path.join(data_path_prefix, data)
         cmd = [
             build_memory_index,
-            "--data_type", "float",
+            "--data_type", data_type,
             "--dist_fn", "l2",
             "--data_path", data_path,
             "--index_path_prefix", diskann_index_path,
@@ -315,6 +322,7 @@ def run_index_step(state, temp_state, trans_state, data, l, r, alpha, saturate_g
             "--saturate_graph" if saturate_graph else "",
         ]
 
+        print(cmd)
         # build index and process output
         stdout_file, _ = run_serialized_command(cmd, index_base_path)
     else:
@@ -362,8 +370,10 @@ def extract_query_step_data(out_files):
     return data
 
 
-def get_ground_truth(state, temp_state, trans_state, data_file: str, query_data_file: str, k=100):
+def get_ground_truth(state, temp_state, trans_state, data_file: str, query_data_file: str, k=100, data_type='float'):
     data_path_prefix = trans_state["sift_data_path"] if data_file.startswith("sift") else trans_state["rand_data_path"]
+    if (data_file.startswith("bigann")):
+        data_path_prefix = trans_state["bigann_data_path"]
     ground_truth_file = os.path.join(data_path_prefix, "d{}_q{}.gt_{}".format(data_file.replace(".fbin", ""),
                                                                               query_data_file.replace(".fbin", ""),
                                                                               k))
@@ -371,7 +381,7 @@ def get_ground_truth(state, temp_state, trans_state, data_file: str, query_data_
         compute_groundtruth = trans_state["compute_groundtruth"]
         cmd = [
             compute_groundtruth,
-            "--data_type", "float",
+            "--data_type", data_type,
             "--dist_fn", "l2",
             "--base_file", os.path.join(data_path_prefix, data_file),
             "--query_file", os.path.join(data_path_prefix, query_data_file),
@@ -382,7 +392,7 @@ def get_ground_truth(state, temp_state, trans_state, data_file: str, query_data_
     return ground_truth_file
 
 
-def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k, l):
+def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k, l, data_type='float'):
     project_root: str = temp_state["project_root"]
     build_key = trans_state["build_key"]
     index_key = trans_state["index_key"]
@@ -392,8 +402,10 @@ def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k,
     search_memory_index = trans_state["search_memory_index"]
     diskann_index_path = trans_state["diskann_index_path"]
     indexed_data_file = trans_state["indexed_data_file"]
-    ground_truth_file = get_ground_truth(state, temp_state, trans_state, indexed_data_file, data)
+    ground_truth_file = get_ground_truth(state, temp_state, trans_state, indexed_data_file, data, data_type=data_type)
     data_path_prefix = trans_state["sift_data_path"] if data.startswith("sift") else trans_state["rand_data_path"]
+    if (data.startswith("bigann")):
+        data_path_prefix = trans_state["bigann_data_path"]
     data_path = os.path.join(data_path_prefix, data)
 
     run_result_bin_files = []
@@ -404,7 +416,7 @@ def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k,
         os.makedirs(query_run_path, exist_ok=True)
         cmd = [
             search_memory_index,
-            "--data_type", "float",
+            "--data_type", data_type,
             "--dist_fn", "l2",
             "--index_path_prefix", diskann_index_path,
             "--query_file", data_path,
@@ -449,8 +461,10 @@ def run_serialized_benchmarks(project_root, params, last_state=None, dry_run=Fal
             required_datasets.append("sift")
         if any(ds.startswith("rand") for ds in referenced_datasets):
             required_datasets.append("rand")
-
+        if any(ds.startswith("bigann") for ds in referenced_datasets):
+            required_datasets.append("bigann")
         # temporary states, exist across different benchmarks (not persisted)
+        
         temp_state = {"project_root": project_root,
                       "recent_builds": set(),
                       "recent_datasets": set(),
@@ -497,14 +511,14 @@ def run_serialized_benchmarks(project_root, params, last_state=None, dry_run=Fal
             # index step
             # need to run index, regardless of it exists of not, because query depends on it
             with Timed(binded_print(f" {i + 1:>3}/{num_benchmarks} [index]")) as t:
-                run_index_step(state, temp_state, trans_state, use_existing_index=use_existing_index, **index_param)
+                run_index_step(state, temp_state, trans_state, use_existing_index=use_existing_index, **index_param, data_type='uint8')
             total_elapsed_time += t.time_elapsed()
 
             # query step
             for query_i, (query_param, query_key) in enumerate(zip(query_params, query_keys)):
                 if not query_benchmark_exist(state, build_key, index_key, query_key):
                     with Timed(binded_print(f" {i + 1:>3}/{num_benchmarks} [query_{query_i}]")) as t:
-                        run_query_step(state, temp_state, trans_state, query_key, **query_param)
+                        run_query_step(state, temp_state, trans_state, query_key, **query_param, data_type='uint8')
                     total_elapsed_time += t.time_elapsed()
 
             # remove the index after query to conserve disk space
@@ -892,10 +906,10 @@ def plot_benchmarks(index_df, query_df, name_prefix):
 alpha_one_to_one_point_six = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6]
 alpha_one_to_two = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.55, 1.6, 1.65, 1.7,
                     1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
-alpha_1_2 = [1, 1.2, 1.5]
+alpha_1_2 = [1.2]
 
 if __name__ == '__main__':
-    dataset_bench = "sift_base.fbin"
+    dataset_bench = "bigann_50M.bbin"
     grouped_param = group_benchmark_params([
         # ============ Sift benchmarks ============
         # {  # building parameters
@@ -913,7 +927,7 @@ if __name__ == '__main__':
         #     "query_k": [10], },
         {  # building parameters
             "build_isolate_alpha": ["Off"],
-            "build_knn_index": [0, 2, 4, 8, 16, 32],
+            "build_knn_index": [0],
             "build_tracking": False,
             # indexing parameters
             "index_data": dataset_bench,
@@ -922,7 +936,7 @@ if __name__ == '__main__':
             "index_alpha": alpha_1_2,
             # query parameters
             "query_num_runs": 5,
-            "query_data": "sift_query.fbin",
+            "query_data": "bigann_query.bbin",
             "query_l": [50],
             "query_k": [10], },
         # ============ Random benchmarks ============
@@ -953,14 +967,14 @@ if __name__ == '__main__':
         #     "query_l": [50, 100],
         #     "query_k": 50, },
     ])
-    # run_benchmarks(
-    #     grouped_param,
-    #     dry_run=False,
-    #     last_state=None,
-    #     use_existing_index=False,
-    #     delete_index_after_query=True
-    # )
-    if True:
+    run_benchmarks(
+        grouped_param,
+        dry_run=False,
+        last_state=None,
+        use_existing_index=False,
+        delete_index_after_query=False
+    )
+    if False:
         index_df, query_df = consolidate_data(
             grouped_param,
             "state_20250401_152636.json",
