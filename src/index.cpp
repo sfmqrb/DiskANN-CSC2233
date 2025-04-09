@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <cstdint>
 #include <omp.h>
 
 #include <stdexcept>
@@ -978,6 +979,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
+        hops++;
     }
     return std::make_pair(hops, cmps);
 }
@@ -991,10 +993,13 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
+    uint32_t hops, comps;
     if (!use_filter)
     {
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        auto res = iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        hops = res.first;
+        comps = res.second;
     }
     else
     {
@@ -1060,6 +1065,90 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
     assert(!pruned_list.empty());
     assert(_graph_store->get_total_points() == _max_points + _num_frozen_pts);
+}
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_for_point_and_prune_stat(int location, uint32_t Lindex,
+                                                        std::vector<uint32_t> &pruned_list,
+                                                        InMemQueryScratch<T> *scratch, bool use_filter,
+                                                        uint32_t filteredLindex)
+{
+    const std::vector<uint32_t> init_ids = get_init_ids();
+    const std::vector<LabelT> unused_filter_label;
+
+    uint32_t hops, comps;
+    if (!use_filter)
+    {
+        _data_store->get_vector(location, scratch->aligned_query());
+        auto res = iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        hops = res.first;
+        comps = res.second;
+    }
+    else
+    {
+        std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
+        if (_dynamic_index)
+            tl.lock();
+        std::vector<uint32_t> filter_specific_start_nodes;
+        for (auto &x : _location_to_labels[location])
+            filter_specific_start_nodes.emplace_back(_label_to_start_id[x]);
+
+        if (_dynamic_index)
+            tl.unlock();
+
+        _data_store->get_vector(location, scratch->aligned_query());
+        iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
+                               _location_to_labels[location], false);
+
+        // combine candidate pools obtained with filter and unfiltered criteria.
+        std::set<Neighbor> best_candidate_pool;
+        for (auto filtered_neighbor : scratch->pool())
+        {
+            best_candidate_pool.insert(filtered_neighbor);
+        }
+
+        // clear scratch for finding unfiltered candidates
+        scratch->clear();
+
+        _data_store->get_vector(location, scratch->aligned_query());
+        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+
+        for (auto unfiltered_neighbour : scratch->pool())
+        {
+            // insert if this neighbour is not already in best_candidate_pool
+            if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
+            {
+                best_candidate_pool.insert(unfiltered_neighbour);
+            }
+        }
+
+        scratch->pool().clear();
+        std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
+    }
+
+    auto &pool = scratch->pool();
+
+    for (uint32_t i = 0; i < pool.size(); i++)
+    {
+        if (pool[i].id == (uint32_t)location)
+        {
+            pool.erase(pool.begin() + i);
+            i--;
+        }
+    }
+
+    AddConstructionPathLength(pool.size());
+
+    if (pruned_list.size() > 0)
+    {
+        throw diskann::ANNException("ERROR: non-empty pruned_list passed", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    prune_neighbors(location, pool, pruned_list, scratch);
+
+    assert(!pruned_list.empty());
+    assert(_graph_store->get_total_points() == _max_points + _num_frozen_pts);
+    return std::make_pair(hops, comps);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1322,6 +1411,8 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::link()
 {
+    std::atomic<uint64_t> total_hops(0);
+    std::atomic<uint64_t> total_comps(0);
     uint32_t num_threads = _indexingThreads;
     if (num_threads != 0)
         omp_set_num_threads(num_threads);
@@ -1372,7 +1463,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             }
             else
             {
-                search_for_point_and_prune(node, currIndexingQueueSize, pruned_list, scratch);
+                auto res = search_for_point_and_prune_stat(node, currIndexingQueueSize, pruned_list, scratch);
+                total_hops += res.first;
+                total_comps += res.second;
             }
             assert(pruned_list.size() > 0);
 
@@ -1391,6 +1484,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                               << std::flush;
             }
         }
+        std::cout << "\r100% of index build completed." << std::endl;
+        std::cout << "Total hops: " << total_hops << " Total comps: " << total_comps << std::endl;
+        //average hops and comps per node
+        std::cout << "Average hops: " << (total_hops / (visit_order.size())) << " Average comps: "
+                  << (total_comps / (visit_order.size())) << std::endl;
 #ifdef TWO_PASS_INDEXING
     }
 #endif
