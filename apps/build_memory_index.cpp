@@ -166,7 +166,9 @@ int main(int argc, char **argv)
         index->build(data_path, data_num, filter_params);
         index->save(index_path_prefix.c_str());
         index.reset();
+#ifdef TRACKING_ENABLED
         EndConstruction();
+        #endif
         return 0;
     }
     catch (const std::exception &e)

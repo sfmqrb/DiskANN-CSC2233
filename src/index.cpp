@@ -891,7 +891,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
 
+    #ifdef TRACKING_ENABLED
         VisitedNode(n, nbr.distance);
+        #endif
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -1054,7 +1056,10 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         }
     }
 
+
+    #ifdef TRACKING_ENABLED
     AddConstructionPathLength(pool.size());
+    #endif
 
     if (pruned_list.size() > 0)
     {
@@ -1137,7 +1142,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_for_point_and_prune
         }
     }
 
+    #ifdef TRACKING_ENABLED
     AddConstructionPathLength(pool.size());
+    #endif
 
     if (pruned_list.size() > 0)
     {
@@ -1669,7 +1676,9 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &tags)
 {
     diskann::cout << "Starting index build with " << _nd << " points... " << std::endl;
+#ifdef TRACKING_ENABLED
     StartConstruction(_indexingRange, _nd);
+#endif
     if (_nd < 1)
         throw ANNException("Error: Trying to build an index with 0 points", -1, __FUNCSIG__, __FILE__, __LINE__);
 
@@ -1716,9 +1725,10 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
         {
             distances.push_back(_data_store->get_distance(i, neighbor));
         }
+#ifdef TRACKING_ENABLED
         NodeInfo(i, distances);
-
         AddEdgeCount(pool.size());
+         #endif
         if (pool.size() < 2)
             cnt++;
     }
