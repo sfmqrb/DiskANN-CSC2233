@@ -190,8 +190,8 @@ def run_build_step(state, temp_state, trans_state,
                    isolate_alpha,
                    isolate_alpha_direct,
                    two_pass_indexing,
-                   build_two_pass_index_scaled_l_first_pass_,
-                   build_two_pass_index_scaled_l_last_pass_,
+                   build_two_pass_index_scaled_l_first_pass,
+                   build_two_pass_index_scaled_l_last_pass,
                    two_pass_index_sampled_visit_order,
                    sorted_visit_order,
                    tracking):
@@ -1261,7 +1261,7 @@ if __name__ == '__main__':
     ])
     run_benchmarks(
         grouped_param,
-        dry_run=True,
+        dry_run=False,
         last_state=None,
         use_existing_index=False,
         delete_index_after_query=True
