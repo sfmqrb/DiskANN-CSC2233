@@ -1153,13 +1153,13 @@ if __name__ == '__main__':
             "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "rand_128_1k.fbin",
+            "index_data": "sift_base.fbin",
             "index_l": [50, 100, 200, 400, 600, 800],
             "index_r": [64, 128, 197],
             "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "rand_128_1k.fbin",
+            "query_data": "sift_query.fbin",
             "query_l": [10, 50],
             "query_k": [10], },
         {  # building parameters
@@ -1172,13 +1172,13 @@ if __name__ == '__main__':
             "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "rand_128_1k.fbin",
+            "index_data": "sift_base.fbin",
             "index_l": [50, 100, 200, 400, 600, 800],
             "index_r": [64, 197],
             "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "rand_128_1k.fbin",
+            "query_data": "sift_query.fbin",
             "query_l": [10, 50],
             "query_k": [10], },
         {  # building parameters
@@ -1191,13 +1191,13 @@ if __name__ == '__main__':
             "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "rand_128_1k.fbin",
+            "index_data": "sift_base.fbin",
             "index_l": [50, 100, 200, 400, 600, 800],
             "index_r": [64, 197],
             "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "rand_128_1k.fbin",
+            "query_data": "sift_query.fbin",
             "query_l": [10, 50],
             "query_k": [10], },
         # ============ SIFT1M Two Pass Construction benchmarks (K=50) ============
@@ -1211,13 +1211,13 @@ if __name__ == '__main__':
             "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "rand_128_1k.fbin",
+            "index_data": "sift_base.fbin",
             "index_l": [50, 100, 200, 400, 600, 800],
             "index_r": [64, 128, 197],
             "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "rand_128_1k.fbin",
+            "query_data": "sift_query.fbin",
             "query_l": [50],
             "query_k": [50], },
         {  # building parameters
@@ -1230,13 +1230,13 @@ if __name__ == '__main__':
             "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "rand_128_1k.fbin",
+            "index_data": "sift_base.fbin",
             "index_l": [50, 100, 200, 400, 600, 800],
             "index_r": [64, 197],
             "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "rand_128_1k.fbin",
+            "query_data": "sift_query.fbin",
             "query_l": [50],
             "query_k": [50], },
         {  # building parameters
@@ -1249,13 +1249,13 @@ if __name__ == '__main__':
             "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "rand_128_1k.fbin",
+            "index_data": "sift_base.fbin",
             "index_l": [50, 100, 200, 400, 600, 800],
             "index_r": [64, 197],
             "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "rand_128_1k.fbin",
+            "query_data": "sift_query.fbin",
             "query_l": [50],
             "query_k": [50], },
     ])
