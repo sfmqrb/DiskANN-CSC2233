@@ -4,26 +4,26 @@
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
-if(MSVC)
+if (MSVC)
     add_subdirectory(dll)
-else()
+else ()
     #file(GLOB CPP_SOURCES *.cpp)
-    set(CPP_SOURCES abstract_data_store.cpp ann_exception.cpp disk_utils.cpp 
-        distance.cpp index.cpp in_mem_graph_store.cpp in_mem_data_store.cpp
-        linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
-        in_mem_data_store.cpp in_mem_graph_store.cpp
-        natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
-        pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp filter_utils.cpp index_factory.cpp abstract_index.cpp pq_l2_distance.cpp pq_data_store.cpp
-        tracking/tracking.cpp)
+    set(CPP_SOURCES abstract_data_store.cpp ann_exception.cpp disk_utils.cpp
+            distance.cpp index.cpp in_mem_graph_store.cpp in_mem_data_store.cpp
+            linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
+            in_mem_data_store.cpp in_mem_graph_store.cpp
+            natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
+            pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp filter_utils.cpp index_factory.cpp abstract_index.cpp pq_l2_distance.cpp pq_data_store.cpp
+            tracking/tracking.cpp)
     if (RESTAPI)
         list(APPEND CPP_SOURCES restapi/search_wrapper.cpp restapi/server.cpp)
-    endif()
+    endif ()
 
 
     add_library(${PROJECT_NAME} ${CPP_SOURCES})
     add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
 
-    if(TRACKING_ENABLED)
+    if (TRACKING_ENABLED)
         ## load in pkg-config support
         find_package(PkgConfig)
         ## use pkg-config to get hints for 0mq locations
@@ -43,24 +43,45 @@ else()
 
         target_link_libraries(${PROJECT_NAME} PRIVATE ${ZeroMQ_LIBRARY})
         target_link_libraries(${PROJECT_NAME}_s PRIVATE ${ZeroMQ_LIBRARY})
-    endif()
+    endif ()
 
-    if(ISOLATE_ALPHA)
+    if (ISOLATE_ALPHA)
         target_compile_definitions(${PROJECT_NAME} PRIVATE ISOLATE_ALPHA)
         target_compile_definitions(${PROJECT_NAME}_s PRIVATE ISOLATE_ALPHA)
-    endif()
+    elseif (ISOLATE_ALPHA_DIRECT)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE ISOLATE_ALPHA_DIRECT)
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE ISOLATE_ALPHA_DIRECT)
+    endif ()
 
-    if(TWO_PASS_INDEXING)
-        target_compile_definitions(${PROJECT_NAME} PRIVATE TWO_PASS_INDEXING)
-        target_compile_definitions(${PROJECT_NAME}_s PRIVATE TWO_PASS_INDEXING)
-    endif()
+    if (TWO_PASS_INDEXING)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE NUM_INDEXING_PASS=2)
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE NUM_INDEXING_PASS=2)
 
-    if(KNN_INDEX)
+        if (TWO_PASS_INDEX_SCALED_L_FIRST_PASS)
+            target_compile_definitions(${PROJECT_NAME} PRIVATE TWO_PASS_INDEX_SCALED_L_FIRST_PASS)
+            target_compile_definitions(${PROJECT_NAME}_s PRIVATE TWO_PASS_INDEX_SCALED_L_FIRST_PASS)
+        elseif (TWO_PASS_INDEX_SCALED_L_LAST_PASS)
+            target_compile_definitions(${PROJECT_NAME} PRIVATE TWO_PASS_INDEX_SCALED_L_LAST_PASS)
+            target_compile_definitions(${PROJECT_NAME}_s PRIVATE TWO_PASS_INDEX_SCALED_L_LAST_PASS)
+        endif ()
+
+        if (TWO_PASS_INDEX_SAMPLED_VISIT_ORDER)
+            target_compile_definitions(${PROJECT_NAME} PRIVATE TWO_PASS_INDEX_SAMPLED_VISIT_ORDER)
+            target_compile_definitions(${PROJECT_NAME}_s PRIVATE TWO_PASS_INDEX_SAMPLED_VISIT_ORDER)
+        endif ()
+    endif ()
+
+    if (SORTED_VISIT_ORDER)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE SORTED_VISIT_ORDER)
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE SORTED_VISIT_ORDER)
+    endif ()
+
+    if (KNN_INDEX)
         target_compile_definitions(${PROJECT_NAME} PRIVATE KNN_INDEX=${KNN_INDEX})
         target_compile_definitions(${PROJECT_NAME}_s PRIVATE KNN_INDEX=${KNN_INDEX})
-    endif()
-endif()
+    endif ()
+endif ()
 
 if (NOT MSVC)
     install(TARGETS ${PROJECT_NAME} LIBRARY)
-endif()
+endif ()

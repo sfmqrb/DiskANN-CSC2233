@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <span>
 
 #include <type_traits>
 
@@ -29,6 +30,10 @@
 #include <tracking/metrics.h>
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
+
+#ifndef NUM_INDEXING_PASS
+#define NUM_INDEXING_PASS 1
+#endif
 
 namespace diskann
 {
@@ -1084,15 +1089,21 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
     bool is_alpha = false;
-#ifdef ISOLATE_ALPHA
-    is_alpha = true; 
     // ISOLATE_ALPHA flag changes the behaviour of robust prune to better align with the paper's description.
     // Changes the following:
-    // - Directly apply the user defined alpha.
+    // - Directly apply the user defined alpha. (in DIRECT)
     // - Fixed two sweep over the pool (though the paper uses one sweep).
+#ifdef ISOLATE_ALPHA
+    is_alpha = true;
     constexpr int max_sweep = 2;
     int count = 0;
     float cur_alpha = 1.0;
+    while (count < max_sweep && result.size() < degree)
+#elifdef ISOLATE_ALPHA_DIRECT
+    is_alpha = true;
+    constexpr int max_sweep = 2;
+    int count = 0;
+    float cur_alpha = alpha;
     while (count < max_sweep && result.size() < degree)
 #else
     float cur_alpha = 1;
@@ -1170,6 +1181,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
 #ifdef ISOLATE_ALPHA
         ++count;
         cur_alpha = alpha;
+#elifdef ISOLATE_ALPHA_DIRECT
+        ++count;
 #else
         cur_alpha *= 1.2f;
 #endif
@@ -1350,16 +1363,76 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer link_timer;
 
-#ifdef TWO_PASS_INDEXING
-    for (uint32_t currIndexingQueueSize : {_indexingQueueSize / 2, _indexingQueueSize})
+#ifdef SORTED_VISIT_ORDER
     {
-#else
-    uint32_t currIndexingQueueSize = _indexingQueueSize;
-#endif
+        diskann::Timer sort_visit_order_timer;
+
+        // sort visit order by the distance to the entry point
+        std::vector<std::pair<int64_t, float>> distances_to_entry_point(visit_order.size(), {0, 0.});
 #pragma omp parallel for schedule(dynamic, 2048)
         for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
         {
             auto node = visit_order[node_ctr];
+            distances_to_entry_point[node_ctr] = {node, _data_store->get_distance(_start, node)};
+        }
+        std::sort(distances_to_entry_point.begin(), distances_to_entry_point.end(),
+                  [](const auto &p1, const auto &p2) { return p1.second < p2.second; });
+
+        // create the sorted visit order
+        std::vector<uint32_t> sorted_visit_order;
+        sorted_visit_order.reserve(visit_order.size());
+        for (auto [node, dist] : distances_to_entry_point)
+        {
+            sorted_visit_order.push_back(node);
+        }
+        visit_order.swap(sorted_visit_order);
+
+        diskann::cout << "Sort Visit Order time: " << ((double)sort_visit_order_timer.elapsed() / (double)1000000)
+                      << "s" << std::endl;
+    }
+#endif
+
+    std::random_device rand_device{};
+    constexpr int num_pass = NUM_INDEXING_PASS;
+
+    for (int pass_i = 0; pass_i < num_pass; ++pass_i)
+    {
+        diskann::Timer link_pass_timer;
+
+        uint32_t currIndexingQueueSize;
+
+#ifdef TWO_PASS_INDEX_SCALED_L_FIRST_PASS
+        currIndexingQueueSize = pass_i == 0 ? _indexingQueueSize * 2 : _indexingQueueSize;
+#elifdef TWO_PASS_INDEX_SCALED_L_LAST_PASS
+        currIndexingQueueSize = pass_i == 0 ? _indexingQueueSize : _indexingQueueSize * 2;
+#else
+        currIndexingQueueSize = _indexingQueueSize;
+#endif
+
+        std::vector<uint32_t> *curr_visit_order{};
+
+#ifdef TWO_PASS_INDEX_SAMPLED
+        if (pass_i == 0)
+        {
+            std::mt19937 rand_engine{rand_device()};
+            size_t sampled_size = visit_order.size() / 2;
+            curr_visit_order = new std::vector<uint32_t>{};
+            curr_visit_order->reserve(sampled_size);
+            std::sample(visit_order.begin(), visit_order.end(), std::back_inserter(*curr_visit_order), sampled_size,
+                        rand_engine);
+        }
+        else
+        {
+            curr_visit_order = &visit_order;
+        }
+#else
+        curr_visit_order = &visit_order;
+#endif
+
+#pragma omp parallel for schedule(dynamic, 2048)
+        for (int64_t node_ctr = 0; node_ctr < (int64_t)(curr_visit_order->size()); node_ctr++)
+        {
+            auto node = curr_visit_order->at(node_ctr);
 
             // Find and add appropriate graph edges
             ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
@@ -1387,13 +1460,18 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
             if (node_ctr % 100000 == 0)
             {
-                diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
-                              << std::flush;
+                diskann::cout << "\r" << (100.0 * node_ctr) / (curr_visit_order->size())
+                              << "% of index build completed." << std::flush;
             }
         }
-#ifdef TWO_PASS_INDEXING
+
+        // clean up visit order if sampled
+        if (curr_visit_order != &visit_order)
+            delete curr_visit_order;
+
+        diskann::cout << "Pass " << pass_i << " : " << ((double)link_pass_timer.elapsed() / (double)1000000) << "s"
+                      << std::endl;
     }
-#endif
 
     if (_nd > 0)
     {

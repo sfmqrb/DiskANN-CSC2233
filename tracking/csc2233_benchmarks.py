@@ -14,8 +14,12 @@ import glob
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+import matplotlib
 
 from lib.util import create_build, run_and_parse_output, download_sift
+
+MULTI_THREADED_READ_BENCHMARKS = False
+MULTI_THREADED_WRITE_BENCHMARKS = False
 
 
 class Timed:
@@ -79,10 +83,39 @@ def group_benchmark_params(all_params):
     benchmarks: Dict[str, Dict[str, Tuple[Dict, Dict, list]]] = {}
     for param in all_params:
         build_isolate_alpha = get_as_list(param, "build_isolate_alpha", ["Off"])
+        build_isolate_alpha_direct = get_as_list(param, "build_isolate_alpha_direct", ["Off"])
+        build_two_pass_indexing = get_as_list(param, "build_two_pass_indexing", ["Off"])
+        build_two_pass_index_scaled_l_first_pass = get_as_list(param, "build_two_pass_index_scaled_l_first_pass",
+                                                               ["Off"])
+        build_two_pass_index_scaled_l_last_pass = get_as_list(param, "build_two_pass_index_scaled_l_last_pass", ["Off"])
+        build_two_pass_index_sampled_visit_order = get_as_list(param, "build_two_pass_index_sampled_visit_order",
+                                                               ["Off"])
+        build_sorted_visit_order = get_as_list(param, "build_sorted_visit_order", ["Off"])
         build_tracking = get_as_list(param, "build_tracking", [False])
-        for build_isolate_alpha_, build_tracking_ in itertools.product(build_isolate_alpha, build_tracking):
+        for (build_isolate_alpha_,
+             build_isolate_alpha_direct_,
+             build_two_pass_indexing_,
+             build_two_pass_index_scaled_l_first_pass_,
+             build_two_pass_index_scaled_l_last_pass_,
+             build_two_pass_index_sampled_visit_order_,
+             build_sorted_visit_order_,
+             build_tracking_) in itertools.product(
+            build_isolate_alpha,
+            build_isolate_alpha_direct,
+            build_two_pass_indexing,
+            build_two_pass_index_scaled_l_first_pass,
+            build_two_pass_index_scaled_l_last_pass,
+            build_two_pass_index_sampled_visit_order,
+            build_sorted_visit_order,
+            build_tracking):
             build_param = {
                 "isolate_alpha": build_isolate_alpha_,
+                "isolate_alpha_direct": build_isolate_alpha_direct_,
+                "two_pass_indexing": build_two_pass_indexing_,
+                "two_pass_index_scaled_l_first_pass": build_two_pass_index_scaled_l_first_pass_,
+                "two_pass_index_scaled_l_last_pass": build_two_pass_index_scaled_l_last_pass_,
+                "two_pass_index_sampled_visit_order": build_two_pass_index_sampled_visit_order_,
+                "sorted_visit_order": build_sorted_visit_order_,
                 "tracking": build_tracking_,
             }
             build_key = generate_key(build_param)
@@ -153,14 +186,29 @@ def generate_random_dataset(rand_data_gen, output_dir, n_name, N, D=128):
     return random_vector_file
 
 
-def run_build_step(state, temp_state, trans_state, isolate_alpha, tracking):
+def run_build_step(state, temp_state, trans_state,
+                   isolate_alpha,
+                   isolate_alpha_direct,
+                   two_pass_indexing,
+                   build_two_pass_index_scaled_l_first_pass_,
+                   build_two_pass_index_scaled_l_last_pass_,
+                   two_pass_index_sampled_visit_order,
+                   sorted_visit_order,
+                   tracking):
     project_root = temp_state["project_root"]
     build_key = trans_state["build_key"]
     build_path = os.path.join(project_root, "build", build_key)
     data_path = os.path.join(project_root, "build", "data")
     if build_path not in temp_state["recent_builds"]:
         build_path = create_build(project_root, build_subdir=build_key,
-                                  tracking=tracking, type="Release", ISOLATE_ALPHA=isolate_alpha)
+                                  tracking=tracking, type="Release",
+                                  ISOLATE_ALPHA=isolate_alpha,
+                                  ISOLATE_ALPHA_DIRECT=isolate_alpha_direct,
+                                  TWO_PASS_INDEXING=two_pass_indexing,
+                                  TWO_PASS_INDEX_SCALED_L_FIRST_PASS=build_two_pass_index_scaled_l_first_pass_,
+                                  TWO_PASS_INDEX_SCALED_L_LAST_PASS=build_two_pass_index_scaled_l_last_pass_,
+                                  TWO_PASS_INDEX_SAMPLED_VISIT_ORDER=two_pass_index_sampled_visit_order,
+                                  SORTED_VISIT_ORDER=sorted_visit_order)
         temp_state["recent_builds"].add(build_path)
     sift_data_path = os.path.join(data_path, "sift")
     rand_data_path = os.path.join(data_path, "rand")
@@ -221,42 +269,101 @@ def run_serialized_command(cmd, output_dir, wait_one_sec=False):
     return stdout_file, stderr_file
 
 
-def extract_index_step_data(write_output, diskann_index_path):
-    indexing_time = None
-    index_build_info = {}
+def extract_index_step_data(log_file_path, diskann_index_path):
+    # Default values for metrics
+    sort_visit_order_time = 0.0
+    first_pass_time = None
+    second_pass_time = None
+    total_link_time = 0.0
+    total_indexing_time = None
+    total_save_time = None
+    max_degree = None
+    avg_degree = None
+    min_degree = None
+    count_deg_lt_2 = None
 
-    with open(write_output, 'r') as file:
+    # Open and parse the log file line by line.
+    with open(log_file_path, "r") as file:
         for line in file:
-            # Extract indexing time
-            if indexing_time is None:
-                match_time = re.search(r"Indexing time:\s*([\d.]+)", line)
-                if match_time:
-                    indexing_time = float(match_time.group(1))
+            # Extract Sort Visit Order time (if present)
+            match_sort = re.search(r"Sort Visit Order time:\s*([\d.]+)s", line)
+            if match_sort:
+                sort_visit_order_time = float(match_sort.group(1))
 
-            # Extract index build degree data
+            # Extract Pass 0 time
+            match_pass0 = re.search(r"Pass 0\s*:\s*([\d.]+)s", line)
+            if match_pass0 and first_pass_time is None:
+                first_pass_time = float(match_pass0.group(1))
+
+            # Extract Pass 1 time
+            match_pass1 = re.search(r"Pass 1\s*:\s*([\d.]+)s", line)
+            if match_pass1 and second_pass_time is None:
+                second_pass_time = float(match_pass1.group(1))
+
+            # Extract Link time from "Link time:" line
+            match_link = re.search(r"Link time:\s*([\d.]+)s", line)
+            if match_link:
+                total_link_time = float(match_link.group(1))
+
+            # Extract Indexing time
+            if total_indexing_time is None:
+                match_indexing = re.search(r"Indexing time:\s*([\d.]+)", line)
+                if match_indexing:
+                    total_indexing_time = float(match_indexing.group(1))
+
+            # Extract Save time
+            if total_save_time is None:
+                match_save = re.search(r"Time taken for save:\s*([\d.]+)s", line)
+                if match_save:
+                    total_save_time = float(match_save.group(1))
+
+            # Extract index built degree metrics
             match_build = re.search(
                 r"Index built with degree:\s*max:(\d+)\s+avg:([\d.]+)\s+min:(\d+)\s+count\(deg<2\):(\d+)",
                 line
             )
             if match_build:
-                index_build_info['max_degree'] = int(match_build.group(1))
-                index_build_info['avg_degree'] = float(match_build.group(2))
-                index_build_info['min_degree'] = int(match_build.group(3))
-                index_build_info['count_deg_lt_2'] = int(match_build.group(4))
+                max_degree = int(match_build.group(1))
+                avg_degree = float(match_build.group(2))
+                min_degree = int(match_build.group(3))
+                count_deg_lt_2 = int(match_build.group(4))
 
+    # Set default values when metrics are missing
+    if total_indexing_time is None:
+        total_indexing_time = -1.0
+    if total_save_time is None:
+        total_save_time = 0.0
+    if first_pass_time is None:
+        first_pass_time = 0.0
+    if second_pass_time is None:
+        last_pass_time = first_pass_time
+        first_pass_time = 0.0
+    else:
+        last_pass_time = second_pass_time
+
+    # If indexing was successful (i.e. valid indexing time), determine file sizes.
     index_size_byte = 0
     index_data_size_byte = 0
-    if indexing_time is not None:
-        index_size_byte = os.path.getsize(diskann_index_path)
-        index_data_size_byte = os.path.getsize(diskann_index_path + ".data")
-    else:
-        indexing_time = -1.0
+    if total_indexing_time != -1.0:
+        if os.path.exists(diskann_index_path):
+            index_size_byte = os.path.getsize(diskann_index_path)
+        if os.path.exists(diskann_index_path + ".data"):
+            index_data_size_byte = os.path.getsize(diskann_index_path + ".data")
 
+    # Return results in a dictionary
     return {
-        "indexing_time_seconds": indexing_time,
+        "sort_visit_order_time": sort_visit_order_time,
+        "first_pass_link_time": first_pass_time,
+        "last_pass_link_time": last_pass_time,
+        "total_link_time": total_link_time,
+        "max_degree": max_degree,
+        "avg_degree": avg_degree,
+        "min_degree": min_degree,
+        "count_deg_lt_2": count_deg_lt_2,
+        "total_indexing_time": total_indexing_time,
+        "total_save_time": total_save_time,
         "index_size_byte": index_size_byte,
         "index_data_size_byte": index_data_size_byte,
-        **index_build_info
     }
 
 
@@ -289,7 +396,7 @@ def run_index_step(state, temp_state, trans_state, data, l, r, alpha, saturate_g
             "-R", str(r),
             "-L", str(l),
             "--alpha", str(alpha),
-            "--num_threads", "1",
+            "--num_threads", ("0" if MULTI_THREADED_WRITE_BENCHMARKS else "1"),
             "--tracking_addr", f"tcp://localhost:{DEFAULT_TRACKING_PORT}",
             "--saturate_graph" if saturate_graph else "",
         ]
@@ -391,7 +498,7 @@ def run_query_step(state, temp_state, trans_state, query_key, num_runs, data, k,
             "-K", str(k),
             "-L", *[str(l_) for l_ in l],
             "--result_path", result_path,
-            "--num_threads", "1"
+            "--num_threads", "0" if MULTI_THREADED_READ_BENCHMARKS else "1",
         ]
         stdout, _ = run_serialized_command(cmd, query_run_path)
         run_stdouts.append(stdout)
@@ -417,6 +524,11 @@ def run_serialized_benchmarks(project_root, params, last_state=None, dry_run=Fal
     # - trans_state: transient states, only exist across benchmark steps (in one benchmark)
 
     def benchmark_main(state):
+        if MULTI_THREADED_WRITE_BENCHMARKS:
+            print("Write benchmarks will be multi threaded...")
+        if MULTI_THREADED_READ_BENCHMARKS:
+            print("Read benchmarks will be multi threaded...")
+
         # collect required dataset
         referenced_datasets = set()
         for _, index_param, query_params in params:
@@ -559,6 +671,9 @@ def combine_states_to_df(*states, params, params_to_key, flatten_param, subkeys=
 
     for state in states:
         for k, v in state.items():
+            if k not in key_to_param:
+                print(f"Skipping: {k}")
+                continue
             matched_param = key_to_param[k]
             if isinstance(v, dict):
                 grouping_key = "_".join([k, *[f"{sk_as}{v[sk]}" for sk, sk_as in zip(subkeys, subkeys_as)]])
@@ -570,6 +685,18 @@ def combine_states_to_df(*states, params, params_to_key, flatten_param, subkeys=
 
     rows = [row for group in grouped_rows.values() for row in group]
     return pd.DataFrame(rows)
+
+
+def combine_dfs(dfs: List[pd.DataFrame]):
+    columns = dict()
+    for df in dfs:
+        for col in df.columns:
+            if col not in columns:
+                columns[col] = 0
+            columns[col] += 1
+    common_columns = list(k for k, v in columns.items() if v == len(dfs))
+    print("Joining on", common_columns)
+    return pd.merge(dfs[0], dfs[1], on=common_columns, how="inner")
 
 
 def index_param_to_key(build_param, index_param, _):
@@ -603,98 +730,6 @@ def collect_alpha_data_points(df, all_alpha, column_keys):
     min_data = data.min(axis=2).transpose()
     max_data = data.max(axis=2).transpose()
     return mean_data, min_data, max_data
-
-
-PLOT_COLORS = ["lightcoral", "red", "lightgreen", "green", "lightblue", "blue", "plum", "purple"]
-PLOT_COLORS_2 = ["red", "green", "blue", "purple", "darkorange", "saddlebrown"]
-
-
-def plot_construction_benchmark(df: pd.DataFrame, columns, name_prefix):
-    all_index_l = sorted(df["index_l"].unique())
-    all_alpha = sorted(df["index_alpha"].unique())
-    all_index_r = sorted(df["index_r"].unique())
-    all_index_dataset = sorted(df["index_data"].unique())
-    all_isolate_alpha = sorted(df["build_isolate_alpha"].unique())
-    n_row = len(all_index_r) * len(all_index_dataset)
-    n_col = len(columns)
-    fig, axs = plt.subplots(n_row, n_col, figsize=(n_col * 5, n_row * 5), squeeze=False)
-    for plot_row, (index_r, index_dataset) in enumerate(itertools.product(all_index_r, all_index_dataset)):
-        for plot_col, column_name in enumerate(columns):
-            for line_i, (index_l, isolate_alpha) in enumerate(itertools.product(all_index_l, all_isolate_alpha)):
-                line_name = f"L_index={index_l}, isolate_alpha={isolate_alpha}"
-                line_color = PLOT_COLORS[line_i % len(PLOT_COLORS)]
-                line_mean, line_min, line_max = collect_alpha_data_points(
-                    df[(df["index_l"] == index_l) &
-                       (df["index_r"] == index_r) &
-                       (df["index_data"] == index_dataset) &
-                       (df["build_isolate_alpha"] == isolate_alpha)],
-                    all_alpha, [column_name]
-                )
-                # only one dimension
-                line_mean = line_mean.squeeze()
-                line_min = line_min.squeeze()
-                line_max = line_max.squeeze()
-                axs[plot_row][plot_col].fill_between(all_alpha, line_min, line_max, color=line_color, alpha=0.1)
-                axs[plot_row][plot_col].plot(all_alpha, line_mean, "^-", label=line_name, color=line_color)
-            axs[plot_row][plot_col].set_xlabel("alpha")
-            axs[plot_row][plot_col].set_ylabel(column_name)
-            axs[plot_row][plot_col].set_title(f"R_index={index_r}, dataset={index_dataset}")
-            axs[plot_row][plot_col].grid(True, linestyle='--', alpha=0.7)
-    # fig.suptitle(fr"$\alpha$-sensitivity benchmark: index construction")
-    handles, labels = axs[0][0].get_legend_handles_labels()
-    legend_width_frac = 0.07
-    legend_ax = fig.add_axes((0.0, 0.0, legend_width_frac, 1))
-    legend_ax.axis('off')
-    legend_ax.legend(handles, labels, loc='right', title="Legend")
-    fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
-    plt.savefig("{}_index_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
-
-
-def plot_query_benchmark(df: pd.DataFrame, columns, name_prefix):
-    all_index_l = sorted(df["index_l"].unique())
-    all_alpha = sorted(df["index_alpha"].unique())
-    all_index_r = sorted(df["index_r"].unique())
-    all_index_dataset = sorted(df["index_data"].unique())
-    all_isolate_alpha = sorted(df["build_isolate_alpha"].unique())
-    all_query_l = sorted(df["query_l"].unique())
-    all_query_dataset = sorted(df["query_data"].unique())
-    n_row = len(all_index_r) * len(all_index_dataset) * len(all_query_l) * len(all_query_dataset)
-    n_col = len(columns)
-    fig, axs = plt.subplots(n_row, n_col, figsize=(n_col * 5, n_row * 5), squeeze=False)
-    for plot_row, (index_r, index_dataset, query_l, query_dataset) in enumerate(itertools.product(
-            all_index_r, all_index_dataset, all_query_l, all_query_dataset)):
-        for plot_col, column_name in enumerate(columns):
-            for line_i, (index_l, isolate_alpha) in enumerate(itertools.product(all_index_l, all_isolate_alpha)):
-                line_name = f"L_index={index_l}, isolate_alpha={isolate_alpha}"
-                line_color = PLOT_COLORS[line_i % len(PLOT_COLORS)]
-                line_mean, line_min, line_max = collect_alpha_data_points(
-                    df[(df["index_l"] == index_l) &
-                       (df["index_r"] == index_r) &
-                       (df["index_data"] == index_dataset) &
-                       (df["query_l"] == query_l) &
-                       (df["query_data"] == query_dataset) &
-                       (df["build_isolate_alpha"] == isolate_alpha)],
-                    all_alpha, [column_name]
-                )
-                # only one dimension
-                line_mean = line_mean.squeeze()
-                line_min = line_min.squeeze()
-                line_max = line_max.squeeze()
-                axs[plot_row][plot_col].fill_between(all_alpha, line_min, line_max, color=line_color, alpha=0.1)
-                axs[plot_row][plot_col].plot(all_alpha, line_mean, "^-", label=line_name, color=line_color)
-            axs[plot_row][plot_col].set_xlabel("alpha")
-            axs[plot_row][plot_col].set_ylabel(column_name)
-            axs[plot_row][plot_col].set_title(
-                f"dataset={index_dataset}, {query_dataset}\nR_index={index_r}, L_query={query_l}")
-            axs[plot_row][plot_col].grid(True, linestyle='--', alpha=0.7)
-    # fig.suptitle(fr"$\alpha$-sensitivity benchmark: query")
-    handles, labels = axs[0][0].get_legend_handles_labels()
-    legend_width_frac = 0.07
-    legend_ax = fig.add_axes((0.0, 0.0, legend_width_frac, 1))
-    legend_ax.axis('off')
-    legend_ax.legend(handles, labels, loc='right', title="Legend")
-    fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
-    plt.savefig("{}_query_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
 
 
 def dominates(a, b, objectives):
@@ -735,79 +770,103 @@ def compute_pareto(points, objectives):
     return pareto_points_idx
 
 
-def plot_pareto_frontier(index_df: pd.DataFrame, query_df: pd.DataFrame,
-                         compare_columns: list[Tuple[Tuple[str, str, str], Tuple[str, str, str], bool]],
-                         name_prefix):
-    # multiple set of graph, identified by (index_data, query_data, query_l)
-    # multiple set of points on one graph, identified by (isolate_alpha, index_r, index_l)
-    # each point is identified by (index_alpha)
-    all_index_l = sorted(query_df["index_l"].unique())
-    all_alpha = sorted(query_df["index_alpha"].unique())
-    all_index_r = sorted(query_df["index_r"].unique())
-    all_index_dataset = sorted(query_df["index_data"].unique())
-    all_isolate_alpha = sorted(query_df["build_isolate_alpha"].unique())
-    all_query_l = sorted(query_df["query_l"].unique())
-    all_query_dataset = sorted(query_df["query_data"].unique())
-    n_row = len(all_index_dataset) * len(all_query_dataset) * len(all_query_l)
-    n_col = len(compare_columns)
-    fig, axs = plt.subplots(n_row, n_col, figsize=(n_col * 7, n_row * 7), squeeze=False)
-    for plot_row, (index_dataset, query_dataset, query_l) in enumerate(
-            itertools.product(all_index_dataset, all_query_dataset, all_query_l)):
-        for plot_col, ((col1_name, col1_objective, col1_src),
-                       (col2_name, col2_objective, col2_src),
-                       plot_pareto) in enumerate(compare_columns):
-            for line_i, (isolate_alpha, index_l, index_r) in enumerate(
-                    itertools.product(all_isolate_alpha, all_index_l, all_index_r)):
-                line_name = f"isolate_alpha={isolate_alpha}, L_index={index_l}, R_index={index_r}"
-                line_color = PLOT_COLORS_2[line_i % len(PLOT_COLORS_2)]
-                val_data, configs = [], []
-                for index_alpha, in itertools.product(all_alpha):
-                    vals = []
-                    for col_name, col_src in [(col1_name, col1_src), (col2_name, col2_src)]:
-                        if col_src == "index":
-                            matched_col_data = index_df[(index_df["index_l"] == index_l) &
-                                                        (index_df["index_r"] == index_r) &
-                                                        (index_df["index_alpha"] == index_alpha) &
-                                                        (index_df["index_data"] == index_dataset) &
-                                                        (index_df["build_isolate_alpha"] == isolate_alpha)][col_name]
-                        else:
-                            matched_col_data = query_df[(query_df["index_l"] == index_l) &
-                                                        (query_df["index_r"] == index_r) &
-                                                        (query_df["index_alpha"] == index_alpha) &
-                                                        (query_df["index_data"] == index_dataset) &
-                                                        (query_df["query_l"] == query_l) &
-                                                        (query_df["query_data"] == query_dataset) &
-                                                        (query_df["build_isolate_alpha"] == isolate_alpha)][col_name]
-                        val = matched_col_data.mean()
-                        vals.append(val)
-                    val_data.append(vals)
-                    configs.append((f"{index_alpha:.2f}",))
-                # compute the pareto frontier
-                pareto_points_idx = compute_pareto(val_data, objectives=(col1_objective, col2_objective))
+def plot_lines(df: pd.DataFrame,
+               column_configs: list[
+                   Tuple[Tuple[str, str | None, str | None], Tuple[str, str | None, str | None], bool, bool]],
+               line_by,
+               point_by,
+               name_prefix,
+               graph_by=None,
+               row_by=None,
+               get_graph_name: Callable = None,
+               get_row_name: Callable = None,
+               get_line_name: Callable = None,
+               get_point_label: Callable = None,
+               master_name=None,
+               legend_style: str | None = "external",  # "external" or matplotlib legend styles
+               color_dict=("blue",),
+               line_style_dict=("^-",),
+               fig_size_scale=(5, 5)):
+    def plot_columns(row_axs_, row_data_, row_name_):
+        line_groups = row_data_.groupby(line_by)
+        for plot_col, ((col1_attr, col1_alt_name, col1_objective), (col2_attr, col2_alt_name, col2_objective),
+                       plot_pareto, plot_bounds) in enumerate(column_configs):
+            col1_name = col1_alt_name if col1_alt_name is not None else col1_attr
+            col2_name = col2_alt_name if col2_alt_name is not None else col2_attr
+            for line_i, (line_attr, line_data) in enumerate(line_groups):
+                line_attr_dict = {k: v for k, v in zip(line_by, line_attr)}
+                line_name = get_line_name(line_attr) if get_line_name is not None else generate_key(line_attr_dict)
+                line_color = color_dict[line_i % len(color_dict)]
+                line_line_style = line_style_dict[line_i % len(line_style_dict)]
+                point_groups = line_data.groupby(point_by)
+                point_values = []
+                for point_attr, point_data in point_groups:
+                    col1_val = point_data[col1_attr]
+                    col2_val = point_data[col2_attr]
+                    point_label = get_point_label(point_attr) if get_point_label is not None else None
+                    point_values.append(
+                        (col1_val.mean(), col2_val.mean(), col2_val.min(), col2_val.max(), point_label))
                 if plot_pareto:
-                    val_data = [(*val_data[idx], configs[idx]) for idx in pareto_points_idx]
-                else:
-                    val_data = [(*vals, config) for vals, config in zip(val_data, configs)]
-                val_sorted = sorted(val_data, key=lambda v: (v[0], v[1]))
-                x_data = [val[0] for val in val_sorted]
-                y_data = [val[1] for val in val_sorted]
-                axs[plot_row][plot_col].plot(x_data, y_data, "^-", label=line_name, color=line_color)
-                for x, y, (label,) in val_sorted:
-                    axs[plot_row][plot_col].annotate(label, (x, y), color=line_color, textcoords="offset points",
-                                                     xytext=(0, 0), fontsize=10)
-            axs[plot_row][plot_col].set_xlabel(col1_name)
-            axs[plot_row][plot_col].set_ylabel(col2_name)
-            axs[plot_row][plot_col].set_title(f"L_query={query_l}")
-            axs[plot_row][plot_col].grid(True, linestyle='--', alpha=0.7)
+                    pareto_points_idx = compute_pareto([(v[0], v[1]) for v in point_values],
+                                                       objectives=(col1_objective, col2_objective))
+                    point_values = [point_values[idx] for idx in pareto_points_idx]
+                point_values.sort(key=lambda v: (v[0], v[1]))
+                x_data = [val[0] for val in point_values]
+                y_data = [val[1] for val in point_values]
+                if plot_bounds:
+                    y_min = [val[2] for val in point_values]
+                    y_max = [val[3] for val in point_values]
+                    row_axs_[plot_col].fill_between(x_data, y_min, y_max, color=line_color, alpha=0.25)
+                row_axs_[plot_col].plot(x_data, y_data, line_line_style, label=line_name, color=line_color)
+                for x, y, _, _, label in point_values:
+                    if label is None: continue
+                    row_axs_[plot_col].annotate(label, (x, y), color=line_color, textcoords="offset points",
+                                                xytext=(0, 0), fontsize=10)
+            row_axs_[plot_col].set_xlabel(col1_name)
+            row_axs_[plot_col].set_ylabel(col2_name)
+            row_axs_[plot_col].set_title(row_name_)
+            row_axs_[plot_col].grid(True, linestyle='--', alpha=0.7)
+            if legend_style is not None and legend_style != "external":
+                row_axs_[plot_col].legend(loc=legend_style)
 
-    # fig.suptitle(fr"$\alpha$-sensitivity benchmark")
-    handles, labels = axs[0][0].get_legend_handles_labels()
-    legend_width_frac = 0.07
-    legend_ax = fig.add_axes((0.0, 0.0, legend_width_frac, 1))
-    legend_ax.axis('off')
-    legend_ax.legend(handles, labels, loc='right', title="Legend")
-    fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
-    plt.savefig("{}_pareto_frontier_benchmark.png".format(name_prefix.replace(" ", "_").lower()), bbox_inches="tight")
+    def plot_rows(graph_data_, graph_name_):
+        if row_by is None:
+            n_col = len(column_configs)
+            fig, axs = plt.subplots(1, n_col, figsize=(n_col * fig_size_scale[0], fig_size_scale[1]))
+            plot_columns(axs, graph_data_, master_name)
+            handles, labels = axs[0].get_legend_handles_labels()
+        else:
+            row_groups = graph_data_.groupby(row_by)
+            n_row = len(row_groups)
+            n_col = len(column_configs)
+            fig, axs = plt.subplots(n_row, n_col, figsize=(n_col * fig_size_scale[0], n_row * fig_size_scale[1]),
+                                    squeeze=False)
+            for plot_row, (row_attr, row_data) in enumerate(row_groups):
+                row_attr_dict = {k: v for k, v in zip(row_by, row_attr)}
+                row_name = get_row_name(row_attr) if get_row_name is not None else pprint.pformat(
+                    row_attr_dict)
+                plot_columns(axs[plot_row], row_data, row_name)
+            handles, labels = axs[0][0].get_legend_handles_labels()
+        if legend_style == "external":
+            legend_width_frac = 0.07
+            legend_ax = fig.add_axes((0.0, 0.0, legend_width_frac, 1))
+            legend_ax.axis('off')
+            legend_ax.legend(handles, labels, loc='right', title="Legend")
+            fig.tight_layout(rect=(legend_width_frac, 0, 1, 1))
+        else:
+            fig.tight_layout()
+        plt.savefig("{}{}.png".format(name_prefix.replace(" ", "_").lower(),
+                                      f"_{graph_name_}" if graph_name_ is not None else ""),
+                    bbox_inches="tight")
+
+    if graph_by is None:
+        plot_rows(df, master_name)
+    else:
+        graph_groups = df.groupby(graph_by)
+        for graph_attr, graph_data in graph_groups:
+            graph_attr_dict = {k: v for k, v in zip(graph_by, graph_attr)}
+            graph_name = get_graph_name(graph_attr) if get_row_name is not None else generate_key(graph_attr_dict)
+            plot_rows(graph_data, graph_name)
 
 
 def run_benchmarks(param, **kwargs):
@@ -819,7 +878,7 @@ def run_benchmarks(param, **kwargs):
 def consolidate_data(param, *state_files):
     states = [load_state(state_file) for state_file in state_files]
     if len(states) == 0:
-        return None, None
+        return None, None, None
     index_df = combine_states_to_df(*[state["index_raw_data"] for state in states],
                                     params=param, params_to_key=index_param_to_key,
                                     flatten_param=flatten_index_param)
@@ -828,134 +887,400 @@ def consolidate_data(param, *state_files):
                                     params=param, params_to_key=query_param_to_key,
                                     flatten_param=flatten_query_param, subkeys=["l"], subkeys_as=["query_l"])
     print(f"Loaded {query_df.shape[0]} data points for query.")
-    return index_df, query_df
+    combined_df = combine_dfs([query_df, index_df])
+    print(f"Combined {combined_df.shape} data points.")
+    return index_df, query_df, combined_df
 
 
-def plot_benchmarks(index_df, query_df, name_prefix):
-    # index construction benchmarks
-    index_plot_columns = ["indexing_time_seconds", "index_size_byte", "index_data_size_byte", "max_degree",
-                          "avg_degree", "min_degree", "count_deg_lt_2"]
-    plot_construction_benchmark(index_df, index_plot_columns, name_prefix=name_prefix)
+def get_categorical_colors(num_category, num_sub_category, cmap="tab10", continuous=False):
+    # https://stackoverflow.com/a/47232942
+    if num_category > plt.get_cmap(cmap).N:
+        raise ValueError("Too many categories for colormap.")
+    if continuous:
+        ccolors = plt.get_cmap(cmap)(np.linspace(0, 1, num_category))
+    else:
+        ccolors = plt.get_cmap(cmap)(np.arange(num_category, dtype=int))
+    cols = np.zeros((num_category * num_sub_category, 3))
+    for i, c in enumerate(ccolors):
+        chsv = matplotlib.colors.rgb_to_hsv(c[:3])
+        arhsv = np.tile(chsv, num_sub_category).reshape(num_sub_category, 3)
+        arhsv[:, 1] = np.linspace(chsv[1], 0.25, num_sub_category)
+        arhsv[:, 2] = np.linspace(chsv[2], 1, num_sub_category)
+        rgb = matplotlib.colors.hsv_to_rgb(arhsv)
+        cols[i * num_sub_category:(i + 1) * num_sub_category, :] = rgb
+    return cols
 
-    # query benchmarks
+
+def plot_benchmarks(df):
+    # column_attr, column_name, column_objective (min/max)
+
+    font = {'weight': 'bold', 'size': 12}
+    matplotlib.rc('font', **font)
+
+    # query performance columns
+    recall_col = ("recall", "Recall@10 (%)", "max")
+    qps_col = ("QPS", "Query Per Seconds", "max")
+    p99_latency_col = ("p99_latency", "Tail Latency P99 (micros)", "min")
+    mean_latency_col = ("mean_latency", "Average Latency (micros)", "min")
+    average_distance_compare_col = ("average_distance_compare", "Average Distance Compare", "min")
+
+    # index performance columns
+    total_indexing_time_col = ("total_indexing_time", "Construction Time (second)", "min")
+    first_pass_link_time_col = ("first_pass_link_time", "First Pass Time (second)", "min")
+    last_pass_link_time_col = ("last_pass_link_time", "Second Pass Time (second)", "min")
+    index_size_byte_col = ("index_size_byte", "Index Size (byte)", "min")
+    avg_degree_col = ("avg_degree", "Average Degree", "min")
+    max_degree_col = ("max_degree", "Max Degree", "min")
+
+    # index build columns
+    alpha_col = ("index_alpha", "Alpha", None)
+    index_l_col = ("index_l", "Lc", None)
+
+    index_plot_columns = ["sort_visit_order_time", "first_pass_link_time", "last_pass_link_time", "total_link_time",
+                          "total_indexing_time", "total_save_time", "index_size_byte", "index_data_size_byte",
+                          "max_degree", "avg_degree", "min_degree", "count_deg_lt_2"]
     query_plot_columns = ["QPS", "average_distance_compare", "mean_latency", "p99_latency", "recall"]
-    plot_query_benchmark(query_df, query_plot_columns, name_prefix=name_prefix)
 
-    # column comparisons, plotted on pareto frontier
-    # column_name, column_objective (min/max), column_sources (query/index)
-    recall_col = ("recall", "max", "query")
-    QPS_col = ("QPS", "max", "query")
-    p99_latency_col = ("p99_latency", "min", "query")
-    mean_latency_col = ("mean_latency", "min", "query")
-    average_distance_compare_col = ("average_distance_compare", "min", "query")
-    indexing_time_col = ("indexing_time_seconds", "min", "index")
-    index_size_byte_col = ("index_size_byte", "min", "index")
-    plot_pareto_frontier(index_df, query_df, compare_columns=[
-        # column_x, column_y, plot_pareto
-        (recall_col, QPS_col, True),
-        (recall_col, average_distance_compare_col, True),
-        # (recall_col, mean_latency_col, True),
-        (QPS_col, index_size_byte_col, False),
-    ], name_prefix=name_prefix)
-    print("Plotted", name_prefix)
+    # varying alpha
+    plot_lines(
+        df[(df["build_two_pass_indexing"] == "Off") & (df["build_sorted_visit_order"] == "Off")],
+        row_by=["query_k", "query_l", "index_r", "index_l"],
+        get_row_name=lambda v: f"SIFT1M, K={int(v[0])}, Lq={int(v[1])}, R={int(v[2])}, Lc={int(v[3])}",
+        column_configs=[
+            (alpha_col, recall_col, False, True),
+            (alpha_col, qps_col, False, True),
+            (alpha_col, average_distance_compare_col, False, True),
+            (alpha_col, index_size_byte_col, False, True),
+            (alpha_col, avg_degree_col, False, True),
+        ],
+        line_by=["build_isolate_alpha", "build_isolate_alpha_direct"],
+        get_line_name=lambda v: "{}".format(("isolate"
+                                             if v[0] == "On" else
+                                             ("direct"
+                                              if v[1] == "On" else "diskann"))),
+        point_by=["index_alpha"],
+        name_prefix="expr1_vary_alpha",
+        color_dict=get_categorical_colors(3, 1),
+        line_style_dict=["-o", "-s", "-^"],
+        legend_style="best",
+    )
+    plot_lines(
+        df[(df["build_two_pass_indexing"] == "Off") & (df["build_sorted_visit_order"] == "Off")
+            # & (df["build_isolate_alpha"] == "Off")
+            # & (df["build_isolate_alpha_direct"] == "Off")
+            # & ((df["index_alpha"] == 1.0) | (df["index_alpha"] == 1.2) | (df["index_alpha"] == 1.6) | (df["index_alpha"] == 1.8))
+           ],
+        row_by=["query_k", "query_l", "index_r", "index_l"],
+        get_row_name=lambda v: f"SIFT1M, K={int(v[0])}, Lq={int(v[1])}, R={int(v[2])}, Lc={int(v[3])}",
+        column_configs=[
+            (recall_col, average_distance_compare_col, True, False),
+            (recall_col, qps_col, True, False),
+        ],
+        line_by=["build_isolate_alpha", "build_isolate_alpha_direct"],
+        get_line_name=lambda v: "{}".format(("isolate"
+                                             if v[0] == "On" else
+                                             ("direct"
+                                              if v[1] == "On" else "diskann"))),
+        point_by=["index_alpha"],
+        get_point_label=lambda v: f"$\\alpha={v[0]:.1f}$",
+        # point_by=["build_isolate_alpha", "build_isolate_alpha_direct"],
+        # get_point_label=lambda v: "{}".format(("isolate"
+        #                                        if v[0] == "On" else
+        #                                        ("direct"
+        #                                         if v[1] == "On" else "diskann"))),
+        # line_by=["index_alpha"],
+        # get_line_name=lambda v: f"$\\alpha$={v[0]}",
+        name_prefix="expr1_vary_alpha_compare",
+        color_dict=get_categorical_colors(10, 1),
+        line_style_dict=["-o", "-s", "-^"],
+        legend_style="best",
+    )
+
+    # two pass
+    plot_lines(
+        df[(df["index_l"] != 50) &
+           (df["index_alpha"] == 1.2) & (df["build_sorted_visit_order"] == "Off") &
+           (df["build_isolate_alpha"] == "Off") & (df["build_isolate_alpha_direct"] == "Off")],
+        row_by=["query_k", "query_l", "index_r"],
+        get_row_name=lambda v: f"SIFT1M, K={int(v[0])}, Lq={int(v[1])}, R={int(v[2])}",
+        column_configs=[
+            (recall_col, average_distance_compare_col, False, False),
+            (recall_col, qps_col, False, False),
+            (recall_col, index_size_byte_col, False, False),
+            (recall_col, avg_degree_col, False, False),
+            (average_distance_compare_col, index_size_byte_col, False, False),
+            (recall_col, total_indexing_time_col, False, False),
+            (average_distance_compare_col, total_indexing_time_col, False, False),
+        ],
+        line_by=["build_two_pass_indexing",
+                 "build_two_pass_index_scaled_l",
+                 "build_two_pass_index_sampled_visit_order"],
+        get_line_name=lambda v: (f"diskann"
+                                 if v[0] == "Off" else
+                                 ((f"full + full" if v[2] == "Off" else f"sampled + full")
+                                  if v[1] == "Off" else
+                                  (f"2Lc + full" if v[2] == "Off" else f"sampled 2Lc + full"))),
+        point_by=["index_l"],
+        get_point_label=lambda v: f"Lc={v[0]}",
+        name_prefix="expr2_two_pass",
+        color_dict=get_categorical_colors(5, 1),
+        line_style_dict=["-o", "-s", "--s", "-^", "--^"],
+        legend_style="best",
+    )
+
+    plot_lines(
+        df[(df["index_l"] != 50) &
+           (df["index_alpha"] == 1.2) & (df["build_sorted_visit_order"] == "Off") &
+           (df["build_isolate_alpha"] == "Off") & (df["build_isolate_alpha_direct"] == "Off")],
+        row_by=["query_k", "query_l", "index_r"],
+        get_row_name=lambda v: f"SIFT1M, K={int(v[0])}, Lq={int(v[1])}, R={int(v[2])}",
+        column_configs=[
+            (index_l_col, avg_degree_col, False, False),
+            (index_l_col, total_indexing_time_col, False, False),
+            (index_l_col, index_size_byte_col, False, False),
+            (index_l_col, first_pass_link_time_col, False, False),
+            (index_l_col, last_pass_link_time_col, False, False),
+        ],
+        line_by=["build_two_pass_indexing",
+                 "build_two_pass_index_scaled_l",
+                 "build_two_pass_index_sampled_visit_order"],
+        get_line_name=lambda v: (f"diskann"
+                                 if v[0] == "Off" else
+                                 ((f"full + full" if v[2] == "Off" else f"sampled + full")
+                                  if v[1] == "Off" else
+                                  (f"2Lc + full" if v[2] == "Off" else f"sampled 2Lc + full"))),
+        point_by=["index_l"],
+        get_point_label=None,
+        name_prefix="expr2_two_pass_index_l",
+        color_dict=get_categorical_colors(5, 1),
+        line_style_dict=["-o", "-s", "--s", "-^", "--^"],
+        legend_style="best",
+    )
+
+    # sorted order
+    plot_lines(
+        df[(df["index_l"] != 50) &
+           (df["index_alpha"] == 1.2) &
+           (df["build_isolate_alpha"] == "Off") & (df["build_isolate_alpha_direct"] == "Off")],
+        row_by=["query_k", "query_l", "index_r"],
+        get_row_name=lambda v: f"SIFT1M, K={int(v[0])}, Lq={int(v[1])}, R={int(v[2])}",
+        column_configs=[
+            (recall_col, average_distance_compare_col, False, False),
+            (recall_col, index_size_byte_col, False, False),
+            (average_distance_compare_col, index_size_byte_col, False, False),
+            (recall_col, total_indexing_time_col, False, False),
+            (average_distance_compare_col, total_indexing_time_col, False, False),
+        ],
+        line_by=["build_sorted_visit_order",
+                 "build_two_pass_indexing",
+                 "build_two_pass_index_scaled_l",
+                 "build_two_pass_index_sampled_visit_order"],
+        get_line_name=lambda v: ((f"one pass"
+                                  if v[1] == "Off" else
+                                  ((f"full + full" if v[3] == "Off" else f"sampled + full")
+                                   if v[2] == "Off" else
+                                   (f"2Lc + full" if v[3] == "Off" else f"sampled 2Lc + full")))
+                                 if v[0] == "Off" else
+                                 (f"one pass (sorted)"
+                                  if v[1] == "Off" else
+                                  ((f"full + full (sorted)" if v[3] == "Off" else f"sampled + full (sorted)")
+                                   if v[2] == "Off" else
+                                   (f"2Lc + full (sorted)" if v[3] == "Off" else
+                                    f"sampled 2Lc 1 + full 2 (sorted)")))),
+        point_by=["index_l"],
+        get_point_label=lambda v: f"Lc={v[0]}",
+        name_prefix="expr3_sorted_order",
+        color_dict=get_categorical_colors(2, 5),
+        legend_style="best",
+    )
 
 
 alpha_one_to_one_point_six = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6]
 alpha_one_to_two = [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.55, 1.6, 1.65, 1.7,
                     1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
+alpha_one_to_one_point_six_whole = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]
+alpha_one_to_two_whole = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 
 if __name__ == '__main__':
     grouped_param = group_benchmark_params([
-        # ============ Sift benchmarks ============
+        # ============ SIFT1M Alpha benchmarks ============
+        # {  # building parameters
+        #     "build_isolate_alpha": ["On", "Off"],
+        #     "build_isolate_alpha_direct": "Off",
+        #     "build_two_pass_indexing": "Off",
+        #     "build_two_pass_index_scaled_l_first_pass": "Off",
+        #     "build_two_pass_index_scaled_l_last_pass": "Off",
+        #     "build_two_pass_index_sampled_visit_order": "Off",
+        #     "build_sorted_visit_order": "Off",
+        #     "build_tracking": False,
+        #     # indexing parameters
+        #     "index_data": "sift_base.fbin",
+        #     "index_l": [50, 100, 150, 200, 400, 600, 800],
+        #     "index_r": 128,
+        #     "index_alpha": alpha_one_to_two_whole,
+        #     # query parameters
+        #     "query_num_runs": 3,
+        #     "query_data": "sift_query.fbin",
+        #     "query_l": [10, 25, 50],
+        #     "query_k": [10], },
+        # {  # building parameters
+        #     "build_isolate_alpha": "Off",
+        #     "build_isolate_alpha_direct": "On",
+        #     "build_two_pass_indexing": "Off",
+        #     "build_two_pass_index_scaled_l_first_pass": "Off",
+        #     "build_two_pass_index_scaled_l_last_pass": "Off",
+        #     "build_two_pass_index_sampled_visit_order": "Off",
+        #     "build_sorted_visit_order": "Off",
+        #     "build_tracking": False,
+        #     # indexing parameters
+        #     "index_data": "sift_base.fbin",
+        #     "index_l": [50, 100, 150, 200, 400, 600, 800],
+        #     "index_r": 128,
+        #     "index_alpha": alpha_one_to_two_whole,
+        #     # query parameters
+        #     "query_num_runs": 3,
+        #     "query_data": "sift_query.fbin",
+        #     "query_l": [10, 25, 50],
+        #     "query_k": [10], },
+        # ============ SIFT1M Two Pass Construction benchmarks (K=10) ============
         {  # building parameters
-            "build_isolate_alpha": ["On", "Off"],
+            "build_isolate_alpha": "Off",
+            "build_isolate_alpha_direct": "Off",
+            "build_two_pass_indexing": "Off",
+            "build_two_pass_index_scaled_l_first_pass": "Off",
+            "build_two_pass_index_scaled_l_last_pass": "Off",
+            "build_two_pass_index_sampled_visit_order": "Off",
+            "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "sift_base.fbin",
-            "index_l": [25, 50, 75],
-            "index_r": [64],
-            "index_alpha": alpha_one_to_two,
+            "index_data": "rand_128_1k.fbin",
+            "index_l": [50, 100, 200, 400, 600, 800],
+            "index_r": [64, 128, 197],
+            "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "sift_query.fbin",
+            "query_data": "rand_128_1k.fbin",
             "query_l": [10, 50],
             "query_k": [10], },
         {  # building parameters
-            "build_isolate_alpha": ["On", "Off"],
+            "build_isolate_alpha": "Off",
+            "build_isolate_alpha_direct": "Off",
+            "build_two_pass_indexing": "On",
+            "build_two_pass_index_scaled_l_first_pass": ["On", "Off"],
+            "build_two_pass_index_scaled_l_last_pass": "Off",
+            "build_two_pass_index_sampled_visit_order": ["On", "Off"],
+            "build_sorted_visit_order": ["On", "Off"],
             "build_tracking": False,
             # indexing parameters
-            "index_data": "sift_base.fbin",
-            "index_l": [25, 50, 75],
-            "index_r": [64],
-            "index_alpha": alpha_one_to_two,
+            "index_data": "rand_128_1k.fbin",
+            "index_l": [50, 100, 200, 400, 600, 800],
+            "index_r": [64, 197],
+            "index_alpha": [1.2, 1.4],
             # query parameters
             "query_num_runs": 5,
-            "query_data": "sift_query.fbin",
-            "query_l": [50, 100],
+            "query_data": "rand_128_1k.fbin",
+            "query_l": [10, 50],
+            "query_k": [10], },
+        {  # building parameters
+            "build_isolate_alpha": "Off",
+            "build_isolate_alpha_direct": "Off",
+            "build_two_pass_indexing": "On",
+            "build_two_pass_index_scaled_l_first_pass": "Off",
+            "build_two_pass_index_scaled_l_last_pass": ["On", "Off"],
+            "build_two_pass_index_sampled_visit_order": ["On", "Off"],
+            "build_sorted_visit_order": ["On", "Off"],
+            "build_tracking": False,
+            # indexing parameters
+            "index_data": "rand_128_1k.fbin",
+            "index_l": [50, 100, 200, 400, 600, 800],
+            "index_r": [64, 197],
+            "index_alpha": [1.2, 1.4],
+            # query parameters
+            "query_num_runs": 5,
+            "query_data": "rand_128_1k.fbin",
+            "query_l": [10, 50],
+            "query_k": [10], },
+        # ============ SIFT1M Two Pass Construction benchmarks (K=50) ============
+        {  # building parameters
+            "build_isolate_alpha": "Off",
+            "build_isolate_alpha_direct": "Off",
+            "build_two_pass_indexing": "Off",
+            "build_two_pass_index_scaled_l_first_pass": "Off",
+            "build_two_pass_index_scaled_l_last_pass": "Off",
+            "build_two_pass_index_sampled_visit_order": "Off",
+            "build_sorted_visit_order": ["On", "Off"],
+            "build_tracking": False,
+            # indexing parameters
+            "index_data": "rand_128_1k.fbin",
+            "index_l": [50, 100, 200, 400, 600, 800],
+            "index_r": [64, 128, 197],
+            "index_alpha": [1.2, 1.4],
+            # query parameters
+            "query_num_runs": 5,
+            "query_data": "rand_128_1k.fbin",
+            "query_l": [50],
             "query_k": [50], },
-        # ============ Random benchmarks ============
-        # {  # building parameters
-        #     "build_isolate_alpha": ["On", "Off"],
-        #     "build_tracking": False,
-        #     # indexing parameters
-        #     "index_data": "rand_128_1m.fbin",
-        #     "index_l": [25, 50, 75],
-        #     "index_r": [64],
-        #     "index_alpha": alpha_one_to_two,
-        #     # query parameters
-        #     "query_num_runs": 5,
-        #     "query_data": "rand_128_10k.fbin",
-        #     "query_l": [10, 50],
-        #     "query_k": 10, },
-        # {  # building parameters
-        #     "build_isolate_alpha": ["On", "Off"],
-        #     "build_tracking": False,
-        #     # indexing parameters
-        #     "index_data": "rand_128_1m.fbin",
-        #     "index_l": [25, 50, 75],
-        #     "index_r": [64],
-        #     "index_alpha": alpha_one_to_two,
-        #     # query parameters
-        #     "query_num_runs": 5,
-        #     "query_data": "rand_128_10k.fbin",
-        #     "query_l": [50, 100],
-        #     "query_k": 50, },
+        {  # building parameters
+            "build_isolate_alpha": "Off",
+            "build_isolate_alpha_direct": "Off",
+            "build_two_pass_indexing": "On",
+            "build_two_pass_index_scaled_l_first_pass": ["On", "Off"],
+            "build_two_pass_index_scaled_l_last_pass": "Off",
+            "build_two_pass_index_sampled_visit_order": ["On", "Off"],
+            "build_sorted_visit_order": ["On", "Off"],
+            "build_tracking": False,
+            # indexing parameters
+            "index_data": "rand_128_1k.fbin",
+            "index_l": [50, 100, 200, 400, 600, 800],
+            "index_r": [64, 197],
+            "index_alpha": [1.2, 1.4],
+            # query parameters
+            "query_num_runs": 5,
+            "query_data": "rand_128_1k.fbin",
+            "query_l": [50],
+            "query_k": [50], },
+        {  # building parameters
+            "build_isolate_alpha": "Off",
+            "build_isolate_alpha_direct": "Off",
+            "build_two_pass_indexing": "On",
+            "build_two_pass_index_scaled_l_first_pass": "Off",
+            "build_two_pass_index_scaled_l_last_pass": ["On", "Off"],
+            "build_two_pass_index_sampled_visit_order": ["On", "Off"],
+            "build_sorted_visit_order": ["On", "Off"],
+            "build_tracking": False,
+            # indexing parameters
+            "index_data": "rand_128_1k.fbin",
+            "index_l": [50, 100, 200, 400, 600, 800],
+            "index_r": [64, 197],
+            "index_alpha": [1.2, 1.4],
+            # query parameters
+            "query_num_runs": 5,
+            "query_data": "rand_128_1k.fbin",
+            "query_l": [50],
+            "query_k": [50], },
     ])
-    # run_benchmarks(
-    #     grouped_param,
-    #     dry_run=False,
-    #     last_state=None,
-    #     use_existing_index=False,
-    #     delete_index_after_query=True
-    # )
-    index_df, query_df = consolidate_data(
+    run_benchmarks(
         grouped_param,
-        "../state_20250401_132510.json",
+        dry_run=True,
+        last_state=None,
+        use_existing_index=False,
+        delete_index_after_query=True
     )
-    if index_df is not None and query_df is not None:
-        plot_benchmarks(
-            index_df[index_df["index_data"] == "sift_base.fbin"],
-            query_df[(query_df["index_data"] == "sift_base.fbin") &
-                     (query_df["query_k"] == 10)],
-            name_prefix="sift1m_k10"
-        )
-        plot_benchmarks(
-            index_df[index_df["index_data"] == "sift_base.fbin"],
-            query_df[(query_df["index_data"] == "sift_base.fbin") &
-                     (query_df["query_k"] == 50)],
-            name_prefix="sift1m_k50"
-        )
-        # plot_benchmarks(
-        #     index_df[index_df["index_data"] == "rand_128_1m.fbin"],
-        #     query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
-        #              (query_df["query_k"] == 10)],
-        #     name_prefix="rand1m_k10"
-        # )
-        # plot_benchmarks(
-        #     index_df[index_df["index_data"] == "rand_128_1m.fbin"],
-        #     query_df[(query_df["index_data"] == "rand_128_1m.fbin") &
-        #              (query_df["query_k"] == 50)],
-        #     name_prefix="rand1m_k50"
-        # )
+    _, _, combined_df = consolidate_data(
+        grouped_param,
+        # "../state_20250401_132510.json",
+        # "../state_20250401_181019.json",
+        # "../state_20250401_212354.json",
+        # "../state_20250402_023113.json",
+        # "../state_20250410_043337.json",
+        # "../state_20250410_090451.json",
+        # "../state_20250410_182159.json",
+        # "../state_20250411_044535.json",
+        # "../state_20250411_083939.json",
+        # "../state_20250411_144559.json",
+        # "../state_20250411_202031.json",
+    )
+    if combined_df is not None:
+        plot_benchmarks(combined_df)
     else:
         print("None plotted.")

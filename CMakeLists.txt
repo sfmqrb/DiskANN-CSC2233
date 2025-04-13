@@ -33,7 +33,17 @@ option(TRACKING_ENABLED "Enable the socket-based tracking instrumentation" OFF)
 
 option(ISOLATE_ALPHA "Enable ISOLATE_ALPHA flag, controls how alpha in robust prune is applied" OFF)
 
+option(ISOLATE_ALPHA_DIRECT "Enable ISOLATE_ALPHA_DIRECT flag, controls how alpha in robust prune is applied" OFF)
+
 option(TWO_PASS_INDEXING "Enable TWO_PASS_INDEXING flag, controls if two pass index construction is applied" OFF)
+
+option(TWO_PASS_INDEX_SCALED_L_FIRST_PASS "Enable TWO_PASS_INDEX_SCALED_L flag, controls if the L is scaled" OFF)
+
+option(TWO_PASS_INDEX_SCALED_L_LAST_PASS "Enable TWO_PASS_INDEX_SCALED_L flag, controls if the L is scaled" OFF)
+
+option(TWO_PASS_INDEX_SAMPLED_VISIT_ORDER "Enable TWO_PASS_INDEX_SAMPLED_VISIT_ORDER flag, controls if the first pass visit set is sampled" OFF)
+
+option(SORTED_VISIT_ORDER "Enable SORTED_VISIT_ORDER flag, controls if the visit order is sorted" OFF)
 
 option(KNN_INDEX "Enable KNN_INDEX flag, controls how many emperical KNNs are garanteed to be connected to each node" OFF)
 
@@ -43,10 +53,26 @@ endif()
 
 if(ISOLATE_ALPHA)
     message("Building for ISOLATE_ALPHA.")
+elseif(ISOLATE_ALPHA_DIRECT)
+    message("Building for ISOLATE_ALPHA_DIRECT.")
 endif()
 
 if(TWO_PASS_INDEXING)
     message("Building for TWO_PASS_INDEXING.")
+
+    if(TWO_PASS_INDEX_SCALED_L_FIRST_PASS)
+        message("Building for TWO_PASS_INDEX_SCALED_L_FIRST_PASS.")
+    elseif(TWO_PASS_INDEX_SCALED_L_LAST_PASS)
+        message("Building for TWO_PASS_INDEX_SCALED_L_LAST_PASS.")
+    endif()
+
+    if(TWO_PASS_INDEX_SAMPLED_VISIT_ORDER)
+        message("Building for TWO_PASS_INDEX_SAMPLED_VISIT_ORDER.")
+    endif()
+endif()
+
+if(SORTED_VISIT_ORDER)
+    message("Building for SORTED_VISIT_ORDER.")
 endif()
 
 if(KNN_INDEX)
