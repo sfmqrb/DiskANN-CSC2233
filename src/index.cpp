@@ -797,7 +797,7 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
-    const std::vector<LabelT> &filter_labels, bool search_invocation)
+    const std::vector<LabelT> &filter_labels, bool search_invocation, uint32_t search_leniency)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -886,14 +886,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
-    while (best_L_nodes.has_unexpanded_node())
+    while (best_L_nodes.has_unexpanded_node2(search_leniency, Lsize))
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
 
-    #ifdef TRACKING_ENABLED
+#ifdef TRACKING_ENABLED
         VisitedNode(n, nbr.distance);
-        #endif
+#endif
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -1080,12 +1080,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_for_point_and_prune
 {
     const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
+#ifdef SEARCH_LENIENCY
+    const uint32_t search_leniency = (int) SEARCH_LENIENCY;
+#else 
+    const uint32_t search_leniency = 0;
+#endif
 
     uint32_t hops, comps;
     if (!use_filter)
     {
         _data_store->get_vector(location, scratch->aligned_query());
-        auto res = iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        auto neLIndex = Lindex * 2;
+        if (search_leniency == 0) 
+            neLIndex = Lindex;
+        // std::cout << "Lindex: " << Lindex << " neLIndex: " << neLIndex << std::endl;
+        auto res = iterate_to_fixed_point(scratch, neLIndex, init_ids, false, unused_filter_label, false, search_leniency);
         hops = res.first;
         comps = res.second;
     }

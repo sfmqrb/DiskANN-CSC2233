@@ -109,6 +109,21 @@ class NeighborPriorityQueue
         return _cur < _size;
     }
 
+    bool has_unexpanded_node2(uint32_t search_leniency = 0, uint32_t Lindex = 0) const
+    {
+        #ifdef DEBUG
+        std::cout << "has_unexpanded_node2" << std::endl;
+        std::cout << "search_leniency: " << search_leniency << std::endl;
+        std::cout << "_cur: " << _cur << std::endl;
+        std::cout << "_size: " << _size << std::endl;
+        std::cout << "Lindex: " << Lindex << std::endl;
+        #endif
+        if (_size < Lindex)
+        {
+            return _cur < _size;
+        }
+        return _cur < (_size - search_leniency);
+    }
     size_t size() const
     {
         return _size;

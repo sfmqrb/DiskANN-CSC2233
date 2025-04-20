@@ -37,6 +37,8 @@ option(TWO_PASS_INDEXING "Enable TWO_PASS_INDEXING flag, controls if two pass in
 
 option(KNN_INDEX "Enable KNN_INDEX flag, controls how many emperical KNNs are garanteed to be connected to each node" OFF)
 
+option(SEARCH_LENIENCY "during construction be lenient in search termination condition, by default 10" OFF)
+
 if(TRACKING_ENABLED)
     add_definitions(-DDISKANN_TRACKING_ENABLED)
 endif()
@@ -51,6 +53,10 @@ endif()
 
 if(KNN_INDEX)
     message("Building for KNN_INDEX.")
+endif()
+
+if(SEARCH_LENIENCY)
+    message("SEARCH_LENIENCY is set to ${SEARCH_LENIENCY}.")
 endif()
 
 # Install nuget packages for dependencies.

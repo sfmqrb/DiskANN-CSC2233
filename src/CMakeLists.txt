@@ -59,6 +59,12 @@ else()
         target_compile_definitions(${PROJECT_NAME} PRIVATE KNN_INDEX=${KNN_INDEX})
         target_compile_definitions(${PROJECT_NAME}_s PRIVATE KNN_INDEX=${KNN_INDEX})
     endif()
+
+    if(SEARCH_LENIENCY)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE SEARCH_LENIENCY=${SEARCH_LENIENCY})
+        target_compile_definitions(${PROJECT_NAME}_s PRIVATE SEARCH_LENIENCY=${SEARCH_LENIENCY})
+    endif()
+
 endif()
 
 if (NOT MSVC)
